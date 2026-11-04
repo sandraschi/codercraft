@@ -91,4 +91,12 @@ async fn test_codercraft_fleet_depot_and_swarm() {
     }, &store).await;
     assert_eq!(sym_res["success"], true);
     assert!(sym_res["symbols"].as_array().expect("symbols").len() >= 3);
+
+    let help_res = dispatch(Command::GetHelp, &store).await;
+    assert_eq!(help_res["success"], true);
+    assert!(help_res["capabilities"].as_array().expect("caps").len() >= 5);
+
+    let compare_res = dispatch(Command::GetComparison, &store).await;
+    assert_eq!(compare_res["success"], true);
+    assert!(compare_res["matrix"]["codercraft"]["runtime"].as_str().expect("runtime").contains("Native Rust"));
 }

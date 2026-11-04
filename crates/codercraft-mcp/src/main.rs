@@ -90,6 +90,10 @@ enum Commands {
     },
     /// Inspect Stigmergic Agent Swarm status
     Swarm,
+    /// Detailed help and architectural overview
+    HelpOverview,
+    /// Compare CoderCraft with Claude Desktop, OpenCode, and AGY
+    Compare,
 }
 
 fn main() {
@@ -166,9 +170,19 @@ fn main() {
             let res = rt.block_on(dispatch(Command::GetSwarmState, &store));
             println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
         }
+        Some(Commands::HelpOverview) => {
+            let res = rt.block_on(dispatch(Command::GetHelp, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::Compare) => {
+            let res = rt.block_on(dispatch(Command::GetComparison, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
         None => {
-            println!("CoderCraft CLI v{APP_VERSION} on Port {CONTROL_PORT}");
-            println!("Use --help to view available commands or --mcp to start JSON-RPC server.");
+            let help_res = rt.block_on(dispatch(Command::GetHelp, &store));
+            println!("CoderCraft Sovereign Agentic IDE & Studio v{APP_VERSION} (Port {CONTROL_PORT})");
+            println!("{}", serde_json::to_string_pretty(&help_res).unwrap_or_default());
+            println!("\nUse 'codercraft-cli compare' for Claude/OpenCode/AGY matrix, or --mcp for FastMCP server.");
         }
     }
 }
@@ -377,6 +391,16 @@ fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
                             "name": "codercraft_swarm_status",
                             "description": "Inspect Stigmergic Agent Swarm supervisor workers and task ledger.",
                             "inputSchema": { "type": "object", "properties": {} }
+                        },
+                        {
+                            "name": "codercraft_help",
+                            "description": "Get comprehensive CoderCraft help, feature summary, and capabilities.",
+                            "inputSchema": { "type": "object", "properties": {} }
+                        },
+                        {
+                            "name": "codercraft_compare",
+                            "description": "Detailed architectural comparison matrix: CoderCraft vs Claude Desktop vs OpenCode vs AGY.",
+                            "inputSchema": { "type": "object", "properties": {} }
                         }
                     ]
                 }
@@ -452,6 +476,8 @@ fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
                         rt.block_on(dispatch(Command::LaunchFleetProject { folder_name: project.to_string() }, store))
                     }
                     "codercraft_swarm_status" => rt.block_on(dispatch(Command::GetSwarmState, store)),
+                    "codercraft_help" => rt.block_on(dispatch(Command::GetHelp, store)),
+                    "codercraft_compare" => rt.block_on(dispatch(Command::GetComparison, store)),
                     _ => json!({ "error": format!("Unknown tool: {name}") }),
                 };
 

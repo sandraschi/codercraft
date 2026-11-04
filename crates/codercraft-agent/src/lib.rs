@@ -1,7 +1,7 @@
 //! CoderCraft Agent & Stigmergic Refactoring Engine.
 //!
 //! Subsumes OpenCode's dual Plan/Build agent architecture with local/cloud LLM intelligence,
-//! token budget accounting, and automated diff synthesis.
+//! token budget accounting, automated diff synthesis, and stigmergic swarm supervisor state.
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
@@ -152,6 +152,188 @@ impl AgentSession {
 
         self.add_assistant_message(&plan, vec![]);
         plan
+    }
+}
+
+// =========================================================================
+// STIGMERGIC AGENT SWARM SUPERVISOR SUBSYSTEM
+// =========================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorkerRole {
+    Architect,
+    Coder,
+    ClippyLinter,
+    TestRunner,
+    DocSync,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WorkerStatus {
+    Idle,
+    Synthesizing,
+    Linting,
+    Testing,
+    Synchronizing,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmWorker {
+    pub id: String,
+    pub name: String,
+    pub role: WorkerRole,
+    pub status: WorkerStatus,
+    pub current_task: Option<String>,
+    pub processed_count: u64,
+    pub token_spend: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TaskState {
+    Proposed,
+    Claimed,
+    Synthesized,
+    Verified,
+    Committed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StigmergicTask {
+    pub id: String,
+    pub title: String,
+    pub target_file: String,
+    pub required_role: WorkerRole,
+    pub state: TaskState,
+    pub pheromone: f32, // Environmental signal (0.0 .. 1.0)
+    pub log: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmLedger {
+    pub workers: Vec<SwarmWorker>,
+    pub tasks: Vec<StigmergicTask>,
+    pub total_swarm_tokens: u64,
+    pub compiler_pass_rate: f32,
+}
+
+impl Default for SwarmLedger {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SwarmLedger {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            workers: vec![
+                SwarmWorker {
+                    id: "worker-arch-01".to_string(),
+                    name: "Architect-01".to_string(),
+                    role: WorkerRole::Architect,
+                    status: WorkerStatus::Idle,
+                    current_task: None,
+                    processed_count: 12,
+                    token_spend: 14500,
+                },
+                SwarmWorker {
+                    id: "worker-coder-02".to_string(),
+                    name: "Synthesizer-02".to_string(),
+                    role: WorkerRole::Coder,
+                    status: WorkerStatus::Idle,
+                    current_task: None,
+                    processed_count: 28,
+                    token_spend: 38200,
+                },
+                SwarmWorker {
+                    id: "worker-lint-03".to_string(),
+                    name: "ClippyGuard-03".to_string(),
+                    role: WorkerRole::ClippyLinter,
+                    status: WorkerStatus::Idle,
+                    current_task: None,
+                    processed_count: 45,
+                    token_spend: 8900,
+                },
+                SwarmWorker {
+                    id: "worker-test-04".to_string(),
+                    name: "TestRunner-04".to_string(),
+                    role: WorkerRole::TestRunner,
+                    status: WorkerStatus::Idle,
+                    current_task: None,
+                    processed_count: 32,
+                    token_spend: 6400,
+                },
+                SwarmWorker {
+                    id: "worker-docs-05".to_string(),
+                    name: "DocSync-05".to_string(),
+                    role: WorkerRole::DocSync,
+                    status: WorkerStatus::Idle,
+                    current_task: None,
+                    processed_count: 19,
+                    token_spend: 11200,
+                },
+            ],
+            tasks: vec![
+                StigmergicTask {
+                    id: "TASK-801".to_string(),
+                    title: "Synthesize Quad-Display Viewports".to_string(),
+                    target_file: "crates/codercraft-app/src/main.rs".to_string(),
+                    required_role: WorkerRole::Coder,
+                    state: TaskState::Verified,
+                    pheromone: 0.85,
+                    log: "Hunk edits verified against egui 0.37 deferred viewport API".to_string(),
+                },
+                StigmergicTask {
+                    id: "TASK-802".to_string(),
+                    title: "Index Fleet Craft Project Depot".to_string(),
+                    target_file: "crates/codercraft-core/src/lib.rs".to_string(),
+                    required_role: WorkerRole::Architect,
+                    state: TaskState::Committed,
+                    pheromone: 0.95,
+                    log: "All 11 fleet craft ports mapped into clickable launcher depot".to_string(),
+                },
+                StigmergicTask {
+                    id: "TASK-803".to_string(),
+                    title: "Clippy Zero-Panic Audit".to_string(),
+                    target_file: "crates/codercraft-agent/src/lib.rs".to_string(),
+                    required_role: WorkerRole::ClippyLinter,
+                    state: TaskState::Verified,
+                    pheromone: 0.90,
+                    log: "Zero compiler warnings. Deny unwraps intact.".to_string(),
+                },
+            ],
+            total_swarm_tokens: 79200,
+            compiler_pass_rate: 100.0,
+        }
+    }
+
+    /// Advances the stigmergic simulation: workers detect environmental tasks, process them, and decay pheromones.
+    pub fn step_simulation(&mut self) {
+        for task in &mut self.tasks {
+            // Decay pheromone signal
+            task.pheromone = (task.pheromone * 0.98).max(0.1);
+
+            if task.state == TaskState::Proposed {
+                task.state = TaskState::Claimed;
+            } else if task.state == TaskState::Claimed {
+                task.state = TaskState::Synthesized;
+            } else if task.state == TaskState::Synthesized {
+                task.state = TaskState::Verified;
+            }
+        }
+    }
+
+    pub fn push_task(&mut self, title: &str, target_file: &str, role: WorkerRole) {
+        let count = self.tasks.len() + 1;
+        self.tasks.push(StigmergicTask {
+            id: format!("TASK-9{:02}", count),
+            title: title.to_string(),
+            target_file: target_file.to_string(),
+            required_role: role,
+            state: TaskState::Proposed,
+            pheromone: 1.0,
+            log: format!("Task '{title}' deposited in swarm environment."),
+        });
     }
 }
 

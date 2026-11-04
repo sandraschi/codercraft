@@ -68,3 +68,18 @@ async fn test_codercraft_read_range_and_grep() {
     assert_eq!(grep_res["success"], true);
     assert!(grep_res["match_count"].as_u64().expect("match_count") > 0);
 }
+
+#[tokio::test]
+async fn test_codercraft_fleet_depot_and_swarm() {
+    let store = DatabaseStore::open_in_memory().expect("db store open");
+    let depot_res = dispatch(Command::ListFleetProjects, &store).await;
+    assert_eq!(depot_res["success"], true);
+    assert!(depot_res["total_projects"].as_u64().expect("total_projects") >= 10);
+
+    let swarm_res = dispatch(Command::GetSwarmState, &store).await;
+    assert_eq!(swarm_res["success"], true);
+    assert_eq!(swarm_res["workers"].as_array().expect("workers").len(), 5);
+
+    let step_res = dispatch(Command::StepSwarm, &store).await;
+    assert_eq!(step_res["success"], true);
+}

@@ -76,6 +76,14 @@ enum Commands {
         #[arg(long)]
         filter: Option<String>,
     },
+    /// List all fleet Craft apps in depot
+    Depot,
+    /// Launch a Craft fleet app by name
+    Launch {
+        project: String,
+    },
+    /// Inspect Stigmergic Agent Swarm status
+    Swarm,
 }
 
 fn main() {
@@ -130,6 +138,18 @@ fn main() {
         }
         Some(Commands::Test { filter }) => {
             let res = rt.block_on(dispatch(Command::RunTestSuite { test_filter: filter }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::Depot) => {
+            let res = rt.block_on(dispatch(Command::ListFleetProjects, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::Launch { project }) => {
+            let res = rt.block_on(dispatch(Command::LaunchFleetProject { folder_name: project }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::Swarm) => {
+            let res = rt.block_on(dispatch(Command::GetSwarmState, &store));
             println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
         }
         None => {
@@ -310,6 +330,25 @@ fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
                                 },
                                 "required": ["command_line"]
                             }
+                        },
+                        {
+                            "name": "codercraft_fleet_depot",
+                            "description": "List all 11 Craft fleet apps, ports, and execution states.",
+                            "inputSchema": { "type": "object", "properties": {} }
+                        },
+                        {
+                            "name": "codercraft_fleet_launch",
+                            "description": "Launch a Craft fleet app by name.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": { "project": { "type": "string" } },
+                                "required": ["project"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_swarm_status",
+                            "description": "Inspect Stigmergic Agent Swarm supervisor workers and task ledger.",
+                            "inputSchema": { "type": "object", "properties": {} }
                         }
                     ]
                 }
@@ -374,6 +413,12 @@ fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
                         let wd = args.get("working_dir").and_then(|w| w.as_str()).map(|w| w.to_string());
                         rt.block_on(dispatch(Command::ExecuteConsoleCommand { command_line: cmd_str.to_string(), working_dir: wd }, store))
                     }
+                    "codercraft_fleet_depot" => rt.block_on(dispatch(Command::ListFleetProjects, store)),
+                    "codercraft_fleet_launch" => {
+                        let project = args.get("project").and_then(|p| p.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(Command::LaunchFleetProject { folder_name: project.to_string() }, store))
+                    }
+                    "codercraft_swarm_status" => rt.block_on(dispatch(Command::GetSwarmState, store)),
                     _ => json!({ "error": format!("Unknown tool: {name}") }),
                 };
 

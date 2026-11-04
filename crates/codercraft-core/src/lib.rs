@@ -4,10 +4,11 @@
 //! Features parity with Claude Desktop / AGY:
 //! - Multi-language support (Rust, Python, TypeScript, Go, C++)
 //! - Automated linter setup (Clippy, Ruff, Biome, golangci-lint, clang-tidy)
-//! - Repository and project explorer with recursive file tree
+//! - Multi-Display Quad Layout management (Editor, Terminals, Supervisor, Preview)
+//! - Fleet Project Depot (One-click launch for all 11+ Craft apps)
+//! - Stigmergic Agent Swarm state management
 //! - Workspace instruction discovery (AGENTS.md, CLAUDE.md, .cursorrules)
 //! - Local (Ollama) and Cloud (Claude, GPT, DeepSeek) LLM configuration
-//! - Stigmergic tool calling, logging, and integrated terminal/bash execution
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
@@ -16,7 +17,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use codercraft_agent::{AgentEngine, AgentMode, AgentSession};
+use codercraft_agent::{AgentEngine, AgentMode, AgentSession, SwarmLedger};
 use databasecraft_store::DatabaseStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -72,6 +73,161 @@ pub struct WorkspaceInstructions {
     pub agents_md: Option<String>,
     pub claude_md: Option<String>,
     pub cursor_rules: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FleetProjectEntry {
+    pub name: String,
+    pub folder_name: String,
+    pub port: u16,
+    pub description: String,
+    pub category: String,
+    pub start_bat_path: String,
+    pub is_running: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FleetDepot {
+    pub projects: Vec<FleetProjectEntry>,
+}
+
+impl Default for FleetDepot {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FleetDepot {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            projects: vec![
+                FleetProjectEntry {
+                    name: "codercraft".to_string(),
+                    folder_name: "codercraft".to_string(),
+                    port: 14128,
+                    description: "Sovereign Agentic IDE & Universal MCP Server".to_string(),
+                    category: "IDE / DevTools".to_string(),
+                    start_bat_path: "D:\\Dev\\repos\\codercraft\\start.bat".to_string(),
+                    is_running: true,
+                },
+                FleetProjectEntry {
+                    name: "databasecraft".to_string(),
+                    folder_name: "databasecraft".to_string(),
+                    port: 14113,
+                    description: "Sovereign Embedded SQLite + Vector RAG Storage Engine".to_string(),
+                    category: "Data / Storage".to_string(),
+                    start_bat_path: "D:\\Dev\\repos\\databasecraft\\start.bat".to_string(),
+                    is_running: false,
+                },
+                FleetProjectEntry {
+                    name: "djcraft".to_string(),
+                    folder_name: "djcraft".to_string(),
+                    port: 14118,
+                    description: "Universal DJ Controller, Stem Separation & DVS Studio".to_string(),
+                    category: "Audio / Creative".to_string(),
+                    start_bat_path: "D:\\Dev\\repos\\djcraft\\start.bat".to_string(),
+                    is_running: false,
+                },
+                FleetProjectEntry {
+                    name: "modcraft".to_string(),
+                    folder_name: "modcraft".to_string(),
+                    port: 14120,
+                    description: "Tracker, Synthesizer & Sound Design Audio Workstation".to_string(),
+                    category: "Audio / Music".to_string(),
+                    start_bat_path: "D:\\Dev\\repos\\modcraft\\start.bat".to_string(),
+                    is_running: false,
+                },
+                FleetProjectEntry {
+                    name: "appcraft".to_string(),
+                    folder_name: "appcraft".to_string(),
+                    port: 14114,
+                    description: "Cross-Platform Mobile & Desktop Sovereign GUI Studio".to_string(),
+                    category: "Applications".to_string(),
+                    start_bat_path: "D:\\Dev\\repos\\appcraft\\start.bat".to_string(),
+                    is_running: false,
+                },
+                FleetProjectEntry {
+                    name: "robotcraft".to_string(),
+                    folder_name: "robotcraft".to_string(),
+                    port: 14115,
+                    description: "Autonomous Robotics Simulation, Kinematics & URDF CAD".to_string(),
+                    category: "Robotics".to_string(),
+                    start_bat_path: "D:\\Dev\\repos\\robotcraft\\start.bat".to_string(),
+                    is_running: false,
+                },
+                FleetProjectEntry {
+                    name: "writercraft".to_string(),
+                    folder_name: "writercraft".to_string(),
+                    port: 14124,
+                    description: "Sovereign Distraction-Free Authoring & Research Suite".to_string(),
+                    category: "Authoring".to_string(),
+                    start_bat_path: "D:\\Dev\\repos\\writercraft\\start.bat".to_string(),
+                    is_running: false,
+                },
+                FleetProjectEntry {
+                    name: "travelcraft".to_string(),
+                    folder_name: "travelcraft".to_string(),
+                    port: 14129,
+                    description: "Autonomous Baedeker Itinerary & Offline GIS Navigator".to_string(),
+                    category: "Geospatial".to_string(),
+                    start_bat_path: "D:\\Dev\\repos\\travelcraft\\start.bat".to_string(),
+                    is_running: false,
+                },
+                FleetProjectEntry {
+                    name: "makercraft".to_string(),
+                    folder_name: "makercraft".to_string(),
+                    port: 14130,
+                    description: "Parametric CAD/CAM, CNC Toolpaths & 3D Slicing".to_string(),
+                    category: "Hardware / CAD".to_string(),
+                    start_bat_path: "D:\\Dev\\repos\\makercraft\\start.bat".to_string(),
+                    is_running: false,
+                },
+                FleetProjectEntry {
+                    name: "sportscraft".to_string(),
+                    folder_name: "sportscraft".to_string(),
+                    port: 14131,
+                    description: "Biometric Performance & Computer Vision Kinetic Coach".to_string(),
+                    category: "Health / Kinetics".to_string(),
+                    start_bat_path: "D:\\Dev\\repos\\sportscraft\\start.bat".to_string(),
+                    is_running: false,
+                },
+                FleetProjectEntry {
+                    name: "moneycraft".to_string(),
+                    folder_name: "moneycraft".to_string(),
+                    port: 14116,
+                    description: "Double-Entry Ledger & Autonomous Portfolio Analyzer".to_string(),
+                    category: "Finance".to_string(),
+                    start_bat_path: "D:\\Dev\\repos\\moneycraft\\start.bat".to_string(),
+                    is_running: false,
+                },
+                FleetProjectEntry {
+                    name: "democraft-mcp".to_string(),
+                    folder_name: "democraft-mcp".to_string(),
+                    port: 14111,
+                    description: "Fleet Showcase, Print Artworks & A2 Print Poster Hub".to_string(),
+                    category: "Creative / Demo".to_string(),
+                    start_bat_path: "D:\\Dev\\repos\\democraft-mcp\\start.bat".to_string(),
+                    is_running: false,
+                },
+            ],
+        }
+    }
+
+    pub fn launch_project(folder_name: &str) -> (i32, String) {
+        let bat_path = format!("D:\\Dev\\repos\\{folder_name}\\start.bat");
+        if !Path::new(&bat_path).exists() {
+            return (-1, format!("Start script not found: {bat_path}"));
+        }
+
+        let cmd = format!("Start-Process -FilePath '{bat_path}' -WindowStyle Minimized");
+        let (code, stdout, stderr) = CoderCraftCore::execute_shell(&cmd, None);
+        if code == 0 {
+            (0, format!("Launched {folder_name} successfully"))
+        } else {
+            (code, format!("Failed to launch: {stderr} {stdout}"))
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,12 +294,20 @@ pub enum Command {
         goal: String,
         workspace_dir: String,
     },
+    ListFleetProjects,
+    LaunchFleetProject {
+        folder_name: String,
+    },
+    GetSwarmState,
+    StepSwarm,
 }
 
 pub struct CoderCraftCore {
     pub active_language: SupportedLanguage,
     pub mcp_servers: Vec<McpServerEntry>,
     pub llm_config: LlmConfig,
+    pub fleet_depot: FleetDepot,
+    pub swarm_ledger: SwarmLedger,
 }
 
 impl Default for CoderCraftCore {
@@ -186,6 +350,8 @@ impl CoderCraftCore {
                 model_name: "qwen2.5-coder:32b".to_string(),
                 api_key_configured: true,
             },
+            fleet_depot: FleetDepot::new(),
+            swarm_ledger: SwarmLedger::new(),
         }
     }
 
@@ -393,9 +559,12 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
                 "active_language": core.active_language,
                 "mcp_servers_registered": core.mcp_servers.len(),
                 "llm_provider": core.llm_config.provider,
+                "fleet_projects_indexed": core.fleet_depot.projects.len(),
+                "swarm_workers_active": core.swarm_ledger.workers.len(),
                 "capabilities": [
                     "OpenCodeBackbone", "ClaudeDesktopParity", "McpServerRegistry",
-                    "IntegratedBashConsole", "AstTreeSitter", "StigmergicSwarm"
+                    "IntegratedBashConsole", "AstTreeSitter", "StigmergicSwarm",
+                    "QuadDisplayViewports", "FleetProjectDepot"
                 ],
                 "success": true
             })
@@ -548,6 +717,37 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
                 "mode": "Plan",
                 "goal": goal,
                 "plan": plan_text
+            })
+        }
+        Command::ListFleetProjects => {
+            json!({
+                "success": true,
+                "total_projects": core.fleet_depot.projects.len(),
+                "projects": core.fleet_depot.projects
+            })
+        }
+        Command::LaunchFleetProject { folder_name } => {
+            let (code, msg) = FleetDepot::launch_project(&folder_name);
+            json!({
+                "success": code == 0,
+                "exit_code": code,
+                "message": msg
+            })
+        }
+        Command::GetSwarmState => {
+            json!({
+                "success": true,
+                "workers": core.swarm_ledger.workers,
+                "tasks": core.swarm_ledger.tasks,
+                "total_tokens": core.swarm_ledger.total_swarm_tokens,
+                "pass_rate": core.swarm_ledger.compiler_pass_rate
+            })
+        }
+        Command::StepSwarm => {
+            core.swarm_ledger.step_simulation();
+            json!({
+                "success": true,
+                "tasks": core.swarm_ledger.tasks
             })
         }
     }

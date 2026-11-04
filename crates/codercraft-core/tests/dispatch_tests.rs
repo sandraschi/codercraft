@@ -76,10 +76,19 @@ async fn test_codercraft_fleet_depot_and_swarm() {
     assert_eq!(depot_res["success"], true);
     assert!(depot_res["total_projects"].as_u64().expect("total_projects") >= 10);
 
+    let probe_res = dispatch(Command::ProbeFleetProjects, &store).await;
+    assert_eq!(probe_res["success"], true);
+
     let swarm_res = dispatch(Command::GetSwarmState, &store).await;
     assert_eq!(swarm_res["success"], true);
     assert_eq!(swarm_res["workers"].as_array().expect("workers").len(), 5);
 
     let step_res = dispatch(Command::StepSwarm, &store).await;
     assert_eq!(step_res["success"], true);
+
+    let sym_res = dispatch(Command::ExtractSymbols {
+        path: "D:\\Dev\\repos\\codercraft\\crates\\codercraft-core\\src\\lib.rs".to_string(),
+    }, &store).await;
+    assert_eq!(sym_res["success"], true);
+    assert!(sym_res["symbols"].as_array().expect("symbols").len() >= 3);
 }

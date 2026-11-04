@@ -66,7 +66,9 @@ All actions flow through the unified asynchronous dispatcher:
 | `ConfigureLlm` | `config` | Swaps Ollama, Claude, GPT, or DeepSeek models |
 | `AgentRefactor` | `intent, target_file` | Synthesizes an AST unified patch |
 | `AgentPlan` | `goal, workspace_dir` | Formulates a phased implementation plan |
+| `ExtractSymbols` | `path` | Extracts top-level fn, struct, enum symbols |
 | `ListFleetProjects` | None | Returns all 12 Craft fleet apps with ports |
+| `ProbeFleetProjects` | None | Actively probes TCP ports and measures ping latencies |
 | `LaunchFleetProject` | `folder_name` | Executes `start.bat` for the designated app |
 | `GetSwarmState` | None | Returns workers, tasks, pheromones, token spend |
 | `StepSwarm` | None | Advances task state machine and decays pheromones |

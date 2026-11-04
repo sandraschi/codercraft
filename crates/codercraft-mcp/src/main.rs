@@ -47,6 +47,10 @@ enum Commands {
         #[arg(default_value = ".")]
         workspace: String,
     },
+    /// Extract AST symbols (functions, structs, enums) from a file
+    Symbols {
+        path: String,
+    },
     /// Index workspace AST symbols, instructions, and file tree
     Index {
         #[arg(default_value = ".")]
@@ -78,6 +82,8 @@ enum Commands {
     },
     /// List all fleet Craft apps in depot
     Depot,
+    /// Actively probe all fleet Craft apps ports
+    Probe,
     /// Launch a Craft fleet app by name
     Launch {
         project: String,
@@ -120,6 +126,10 @@ fn main() {
             let res = rt.block_on(dispatch(Command::GrepSearch { root: workspace, query }, &store));
             println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
         }
+        Some(Commands::Symbols { path }) => {
+            let res = rt.block_on(dispatch(Command::ExtractSymbols { path }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
         Some(Commands::Index { workspace }) => {
             let res = rt.block_on(dispatch(Command::IndexWorkspace { workspace_dir: workspace }, &store));
             println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
@@ -142,6 +152,10 @@ fn main() {
         }
         Some(Commands::Depot) => {
             let res = rt.block_on(dispatch(Command::ListFleetProjects, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::Probe) => {
+            let res = rt.block_on(dispatch(Command::ProbeFleetProjects, &store));
             println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
         }
         Some(Commands::Launch { project }) => {
@@ -275,6 +289,15 @@ fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
                             }
                         },
                         {
+                            "name": "codercraft_extract_symbols",
+                            "description": "Extract AST function, struct, and enum declarations from file.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": { "path": { "type": "string" } },
+                                "required": ["path"]
+                            }
+                        },
+                        {
                             "name": "codercraft_index_workspace",
                             "description": "Index workspace directory, instruction files, and tree.",
                             "inputSchema": {
@@ -333,7 +356,12 @@ fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
                         },
                         {
                             "name": "codercraft_fleet_depot",
-                            "description": "List all 11 Craft fleet apps, ports, and execution states.",
+                            "description": "List all 12 Craft fleet apps, ports, and execution states.",
+                            "inputSchema": { "type": "object", "properties": {} }
+                        },
+                        {
+                            "name": "codercraft_probe_depot",
+                            "description": "Actively probes TCP ports for all 12 Craft fleet apps and returns latencies.",
                             "inputSchema": { "type": "object", "properties": {} }
                         },
                         {
@@ -389,6 +417,10 @@ fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
                         let query = args.get("query").and_then(|q| q.as_str()).unwrap_or("");
                         rt.block_on(dispatch(Command::GrepSearch { root: root.to_string(), query: query.to_string() }, store))
                     }
+                    "codercraft_extract_symbols" => {
+                        let path = args.get("path").and_then(|p| p.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(Command::ExtractSymbols { path: path.to_string() }, store))
+                    }
                     "codercraft_index_workspace" => {
                         let dir = args.get("workspace_dir").and_then(|d| d.as_str()).unwrap_or(".");
                         rt.block_on(dispatch(Command::IndexWorkspace { workspace_dir: dir.to_string() }, store))
@@ -414,6 +446,7 @@ fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
                         rt.block_on(dispatch(Command::ExecuteConsoleCommand { command_line: cmd_str.to_string(), working_dir: wd }, store))
                     }
                     "codercraft_fleet_depot" => rt.block_on(dispatch(Command::ListFleetProjects, store)),
+                    "codercraft_probe_depot" => rt.block_on(dispatch(Command::ProbeFleetProjects, store)),
                     "codercraft_fleet_launch" => {
                         let project = args.get("project").and_then(|p| p.as_str()).unwrap_or("");
                         rt.block_on(dispatch(Command::LaunchFleetProject { folder_name: project.to_string() }, store))

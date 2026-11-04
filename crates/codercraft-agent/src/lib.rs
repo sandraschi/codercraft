@@ -186,6 +186,8 @@ pub struct SwarmWorker {
     pub current_task: Option<String>,
     pub processed_count: u64,
     pub token_spend: u64,
+    pub pos_x: f32,
+    pub pos_y: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,6 +208,9 @@ pub struct StigmergicTask {
     pub state: TaskState,
     pub pheromone: f32, // Environmental signal (0.0 .. 1.0)
     pub log: String,
+    pub pos_x: f32,
+    pub pos_y: f32,
+    pub linked_worker_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,6 +219,7 @@ pub struct SwarmLedger {
     pub tasks: Vec<StigmergicTask>,
     pub total_swarm_tokens: u64,
     pub compiler_pass_rate: f32,
+    pub simulation_tick: u64,
 }
 
 impl Default for SwarmLedger {
@@ -232,27 +238,33 @@ impl SwarmLedger {
                     name: "Architect-01".to_string(),
                     role: WorkerRole::Architect,
                     status: WorkerStatus::Idle,
-                    current_task: None,
+                    current_task: Some("TASK-802".to_string()),
                     processed_count: 12,
                     token_spend: 14500,
+                    pos_x: 60.0,
+                    pos_y: 80.0,
                 },
                 SwarmWorker {
                     id: "worker-coder-02".to_string(),
                     name: "Synthesizer-02".to_string(),
                     role: WorkerRole::Coder,
-                    status: WorkerStatus::Idle,
-                    current_task: None,
+                    status: WorkerStatus::Synthesizing,
+                    current_task: Some("TASK-801".to_string()),
                     processed_count: 28,
                     token_spend: 38200,
+                    pos_x: 60.0,
+                    pos_y: 190.0,
                 },
                 SwarmWorker {
                     id: "worker-lint-03".to_string(),
                     name: "ClippyGuard-03".to_string(),
                     role: WorkerRole::ClippyLinter,
-                    status: WorkerStatus::Idle,
-                    current_task: None,
+                    status: WorkerStatus::Linting,
+                    current_task: Some("TASK-803".to_string()),
                     processed_count: 45,
                     token_spend: 8900,
+                    pos_x: 60.0,
+                    pos_y: 300.0,
                 },
                 SwarmWorker {
                     id: "worker-test-04".to_string(),
@@ -262,15 +274,19 @@ impl SwarmLedger {
                     current_task: None,
                     processed_count: 32,
                     token_spend: 6400,
+                    pos_x: 60.0,
+                    pos_y: 410.0,
                 },
                 SwarmWorker {
                     id: "worker-docs-05".to_string(),
                     name: "DocSync-05".to_string(),
                     role: WorkerRole::DocSync,
-                    status: WorkerStatus::Idle,
+                    status: WorkerStatus::Synchronizing,
                     current_task: None,
                     processed_count: 19,
                     token_spend: 11200,
+                    pos_x: 60.0,
+                    pos_y: 520.0,
                 },
             ],
             tasks: vec![
@@ -280,8 +296,11 @@ impl SwarmLedger {
                     target_file: "crates/codercraft-app/src/main.rs".to_string(),
                     required_role: WorkerRole::Coder,
                     state: TaskState::Verified,
-                    pheromone: 0.85,
+                    pheromone: 0.88,
                     log: "Hunk edits verified against egui 0.37 deferred viewport API".to_string(),
+                    pos_x: 480.0,
+                    pos_y: 120.0,
+                    linked_worker_id: Some("worker-coder-02".to_string()),
                 },
                 StigmergicTask {
                     id: "TASK-802".to_string(),
@@ -291,6 +310,9 @@ impl SwarmLedger {
                     state: TaskState::Committed,
                     pheromone: 0.95,
                     log: "All 11 fleet craft ports mapped into clickable launcher depot".to_string(),
+                    pos_x: 480.0,
+                    pos_y: 250.0,
+                    linked_worker_id: Some("worker-arch-01".to_string()),
                 },
                 StigmergicTask {
                     id: "TASK-803".to_string(),
@@ -300,15 +322,22 @@ impl SwarmLedger {
                     state: TaskState::Verified,
                     pheromone: 0.90,
                     log: "Zero compiler warnings. Deny unwraps intact.".to_string(),
+                    pos_x: 480.0,
+                    pos_y: 380.0,
+                    linked_worker_id: Some("worker-lint-03".to_string()),
                 },
             ],
             total_swarm_tokens: 79200,
             compiler_pass_rate: 100.0,
+            simulation_tick: 1,
         }
     }
 
     /// Advances the stigmergic simulation: workers detect environmental tasks, process them, and decay pheromones.
     pub fn step_simulation(&mut self) {
+        self.simulation_tick += 1;
+        self.total_swarm_tokens += 320;
+
         for task in &mut self.tasks {
             // Decay pheromone signal
             task.pheromone = (task.pheromone * 0.98).max(0.1);
@@ -325,6 +354,7 @@ impl SwarmLedger {
 
     pub fn push_task(&mut self, title: &str, target_file: &str, role: WorkerRole) {
         let count = self.tasks.len() + 1;
+        let y_offset = 120.0 + (count as f32 * 90.0) % 360.0;
         self.tasks.push(StigmergicTask {
             id: format!("TASK-9{:02}", count),
             title: title.to_string(),
@@ -333,6 +363,15 @@ impl SwarmLedger {
             state: TaskState::Proposed,
             pheromone: 1.0,
             log: format!("Task '{title}' deposited in swarm environment."),
+            pos_x: 480.0,
+            pos_y: y_offset,
+            linked_worker_id: Some(match role {
+                WorkerRole::Architect => "worker-arch-01",
+                WorkerRole::Coder => "worker-coder-02",
+                WorkerRole::ClippyLinter => "worker-lint-03",
+                WorkerRole::TestRunner => "worker-test-04",
+                WorkerRole::DocSync => "worker-docs-05",
+            }.to_string()),
         });
     }
 }

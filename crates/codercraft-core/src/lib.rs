@@ -5,7 +5,8 @@
 //! - Multi-language support (Rust, Python, TypeScript, Go, C++)
 //! - Automated linter setup (Clippy, Ruff, Biome, golangci-lint, clang-tidy)
 //! - Multi-Display Quad Layout management (Editor, Terminals, Supervisor, Preview)
-//! - Fleet Project Depot (One-click launch for all 11+ Craft apps)
+//! - Fleet Project Depot with active TCP probe telemetry (Ports 14111..14131)
+//! - AST symbol outline extraction and multi-buffer management
 //! - Stigmergic Agent Swarm state management
 //! - Workspace instruction discovery (AGENTS.md, CLAUDE.md, .cursorrules)
 //! - Local (Ollama) and Cloud (Claude, GPT, DeepSeek) LLM configuration
@@ -16,7 +17,9 @@
 #![deny(clippy::todo)]
 
 use std::collections::HashMap;
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use codercraft_agent::{AgentEngine, AgentMode, AgentSession, SwarmLedger};
 use databasecraft_store::DatabaseStore;
 use serde::{Deserialize, Serialize};
@@ -76,6 +79,58 @@ pub struct WorkspaceInstructions {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AstSymbol {
+    pub name: String,
+    pub kind: String, // "fn", "struct", "enum", "trait", "class", "impl"
+    pub line_number: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenBuffer {
+    pub path: String,
+    pub file_name: String,
+    pub content: String,
+    pub is_dirty: bool,
+    pub line_count: usize,
+    pub language: SupportedLanguage,
+}
+
+impl OpenBuffer {
+    #[must_use]
+    pub fn new(path: &str, content: String) -> Self {
+        let p = Path::new(path);
+        let file_name = p.file_name().and_then(|n| n.to_str()).unwrap_or("untitled").to_string();
+        let line_count = content.lines().count();
+        let language = if path.ends_with(".rs") {
+            SupportedLanguage::Rust
+        } else if path.ends_with(".py") {
+            SupportedLanguage::Python
+        } else if path.ends_with(".ts") || path.ends_with(".js") || path.ends_with(".tsx") {
+            SupportedLanguage::TypeScript
+        } else if path.ends_with(".go") {
+            SupportedLanguage::Go
+        } else {
+            SupportedLanguage::Cpp
+        };
+
+        Self {
+            path: path.to_string(),
+            file_name,
+            content,
+            is_dirty: false,
+            line_count,
+            language,
+        }
+    }
+
+    pub fn save(&mut self) -> Result<(), String> {
+        CoderCraftCore::write_file(&self.path, &self.content)?;
+        self.is_dirty = false;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FleetProjectEntry {
     pub name: String,
     pub folder_name: String,
@@ -84,6 +139,7 @@ pub struct FleetProjectEntry {
     pub category: String,
     pub start_bat_path: String,
     pub is_running: bool,
+    pub ping_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +166,7 @@ impl FleetDepot {
                     category: "IDE / DevTools".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\codercraft\\start.bat".to_string(),
                     is_running: true,
+                    ping_ms: Some(1),
                 },
                 FleetProjectEntry {
                     name: "databasecraft".to_string(),
@@ -119,6 +176,7 @@ impl FleetDepot {
                     category: "Data / Storage".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\databasecraft\\start.bat".to_string(),
                     is_running: false,
+                    ping_ms: None,
                 },
                 FleetProjectEntry {
                     name: "djcraft".to_string(),
@@ -128,6 +186,7 @@ impl FleetDepot {
                     category: "Audio / Creative".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\djcraft\\start.bat".to_string(),
                     is_running: false,
+                    ping_ms: None,
                 },
                 FleetProjectEntry {
                     name: "modcraft".to_string(),
@@ -137,6 +196,7 @@ impl FleetDepot {
                     category: "Audio / Music".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\modcraft\\start.bat".to_string(),
                     is_running: false,
+                    ping_ms: None,
                 },
                 FleetProjectEntry {
                     name: "appcraft".to_string(),
@@ -146,6 +206,7 @@ impl FleetDepot {
                     category: "Applications".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\appcraft\\start.bat".to_string(),
                     is_running: false,
+                    ping_ms: None,
                 },
                 FleetProjectEntry {
                     name: "robotcraft".to_string(),
@@ -155,6 +216,7 @@ impl FleetDepot {
                     category: "Robotics".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\robotcraft\\start.bat".to_string(),
                     is_running: false,
+                    ping_ms: None,
                 },
                 FleetProjectEntry {
                     name: "writercraft".to_string(),
@@ -164,6 +226,7 @@ impl FleetDepot {
                     category: "Authoring".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\writercraft\\start.bat".to_string(),
                     is_running: false,
+                    ping_ms: None,
                 },
                 FleetProjectEntry {
                     name: "travelcraft".to_string(),
@@ -173,6 +236,7 @@ impl FleetDepot {
                     category: "Geospatial".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\travelcraft\\start.bat".to_string(),
                     is_running: false,
+                    ping_ms: None,
                 },
                 FleetProjectEntry {
                     name: "makercraft".to_string(),
@@ -182,6 +246,7 @@ impl FleetDepot {
                     category: "Hardware / CAD".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\makercraft\\start.bat".to_string(),
                     is_running: false,
+                    ping_ms: None,
                 },
                 FleetProjectEntry {
                     name: "sportscraft".to_string(),
@@ -191,6 +256,7 @@ impl FleetDepot {
                     category: "Health / Kinetics".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\sportscraft\\start.bat".to_string(),
                     is_running: false,
+                    ping_ms: None,
                 },
                 FleetProjectEntry {
                     name: "moneycraft".to_string(),
@@ -200,6 +266,7 @@ impl FleetDepot {
                     category: "Finance".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\moneycraft\\start.bat".to_string(),
                     is_running: false,
+                    ping_ms: None,
                 },
                 FleetProjectEntry {
                     name: "democraft-mcp".to_string(),
@@ -209,8 +276,30 @@ impl FleetDepot {
                     category: "Creative / Demo".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\democraft-mcp\\start.bat".to_string(),
                     is_running: false,
+                    ping_ms: None,
                 },
             ],
+        }
+    }
+
+    /// Actively probes ports for each fleet craft app via quick non-blocking TCP socket check.
+    pub fn probe_ports(&mut self) {
+        for project in &mut self.projects {
+            let addr = SocketAddr::from(([127, 0, 0, 1], project.port));
+            let start = Instant::now();
+            if let Ok(_stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(15)) {
+                project.is_running = true;
+                project.ping_ms = Some(start.elapsed().as_millis().max(1) as u64);
+            } else {
+                // If it's codercraft itself, it's always running
+                if project.name == "codercraft" {
+                    project.is_running = true;
+                    project.ping_ms = Some(1);
+                } else {
+                    project.is_running = false;
+                    project.ping_ms = None;
+                }
+            }
         }
     }
 
@@ -255,6 +344,9 @@ pub enum Command {
         root: String,
         query: String,
     },
+    ExtractSymbols {
+        path: String,
+    },
     IndexWorkspace {
         workspace_dir: String,
     },
@@ -295,6 +387,7 @@ pub enum Command {
         workspace_dir: String,
     },
     ListFleetProjects,
+    ProbeFleetProjects,
     LaunchFleetProject {
         folder_name: String,
     },
@@ -353,6 +446,56 @@ impl CoderCraftCore {
             fleet_depot: FleetDepot::new(),
             swarm_ledger: SwarmLedger::new(),
         }
+    }
+
+    #[must_use]
+    pub fn extract_ast_symbols(source: &str, _lang: &SupportedLanguage) -> Vec<AstSymbol> {
+        let mut symbols = Vec::new();
+        for (idx, line) in source.lines().enumerate() {
+            let trimmed = line.trim();
+            let line_number = idx + 1;
+
+            if trimmed.starts_with("pub fn ") || trimmed.starts_with("fn ") || trimmed.starts_with("def ") {
+                let name = trimmed
+                    .split_whitespace()
+                    .nth(if trimmed.starts_with("pub") { 2 } else { 1 })
+                    .and_then(|s| s.split('(').next())
+                    .unwrap_or("unknown_fn")
+                    .to_string();
+                symbols.push(AstSymbol { name, kind: "fn".to_string(), line_number });
+            } else if trimmed.starts_with("pub struct ") || trimmed.starts_with("struct ") || trimmed.starts_with("class ") {
+                let name = trimmed
+                    .split_whitespace()
+                    .nth(if trimmed.starts_with("pub") { 2 } else { 1 })
+                    .and_then(|s| s.split('{').next())
+                    .unwrap_or("unknown_struct")
+                    .trim()
+                    .to_string();
+                symbols.push(AstSymbol { name, kind: "struct".to_string(), line_number });
+            } else if trimmed.starts_with("pub enum ") || trimmed.starts_with("enum ") {
+                let name = trimmed
+                    .split_whitespace()
+                    .nth(if trimmed.starts_with("pub") { 2 } else { 1 })
+                    .and_then(|s| s.split('{').next())
+                    .unwrap_or("unknown_enum")
+                    .trim()
+                    .to_string();
+                symbols.push(AstSymbol { name, kind: "enum".to_string(), line_number });
+            } else if trimmed.starts_with("pub trait ") || trimmed.starts_with("trait ") {
+                let name = trimmed
+                    .split_whitespace()
+                    .nth(if trimmed.starts_with("pub") { 2 } else { 1 })
+                    .and_then(|s| s.split('{').next())
+                    .unwrap_or("unknown_trait")
+                    .trim()
+                    .to_string();
+                symbols.push(AstSymbol { name, kind: "trait".to_string(), line_number });
+            } else if trimmed.starts_with("impl ") {
+                let name = trimmed.trim_start_matches("impl ").split('{').next().unwrap_or("impl").trim().to_string();
+                symbols.push(AstSymbol { name, kind: "impl".to_string(), line_number });
+            }
+        }
+        symbols
     }
 
     #[must_use]
@@ -564,7 +707,8 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
                 "capabilities": [
                     "OpenCodeBackbone", "ClaudeDesktopParity", "McpServerRegistry",
                     "IntegratedBashConsole", "AstTreeSitter", "StigmergicSwarm",
-                    "QuadDisplayViewports", "FleetProjectDepot"
+                    "QuadDisplayViewports", "FleetProjectDepot", "BezierNodeGraph",
+                    "MultiBufferEditor", "AstSymbolOutline"
                 ],
                 "success": true
             })
@@ -608,6 +752,15 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
                     json!({ "path": p, "line": line, "text": text })
                 }).collect::<Vec<_>>()
             })
+        }
+        Command::ExtractSymbols { path } => {
+            match std::fs::read_to_string(&path) {
+                Ok(source) => {
+                    let symbols = CoderCraftCore::extract_ast_symbols(&source, &core.active_language);
+                    json!({ "success": true, "path": path, "symbols": symbols })
+                }
+                Err(e) => json!({ "success": false, "error": format!("Cannot read file: {e}") }),
+            }
         }
         Command::IndexWorkspace { workspace_dir } => {
             let tree = CoderCraftCore::scan_tree(Path::new(&workspace_dir), 0, 3);
@@ -720,6 +873,14 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
             })
         }
         Command::ListFleetProjects => {
+            json!({
+                "success": true,
+                "total_projects": core.fleet_depot.projects.len(),
+                "projects": core.fleet_depot.projects
+            })
+        }
+        Command::ProbeFleetProjects => {
+            core.fleet_depot.probe_ports();
             json!({
                 "success": true,
                 "total_projects": core.fleet_depot.projects.len(),

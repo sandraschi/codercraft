@@ -72,7 +72,13 @@ Each project card provides one-click `[🚀 Start App]`, `[📂 Open in IDE]`, a
 
 ### 3.3 FastMCP 2024-11-05 Server & Client
 - Headless stdio server (`codercraft-cli --mcp`) communicating over JSON-RPC 2.0.
-- Standard tools for file read/write/edit, grep searching, workspace indexing, architectural planning, code refactoring, and swarm monitoring.
+- Standard tools for file read/write/edit, grep searching, workspace indexing, architectural planning, code refactoring, AST symbol extraction, TCP socket fleet depot probing, and swarm monitoring.
+
+### 3.4 Visual Aesthetics & Cognitive Ergonomics
+- **Tokyo Night / Cyberpunk Slate Palette**: Sleek dark theme with deep panel backgrounds, cyan accent highlights, emerald completion badges, and purple token telemetry.
+- **Bézier Node Graph Spaghetti Canvas**: ComfyUI / MaterialCraft style node canvas connecting worker agents to environmental tasks with cubic Bézier curves and animated pulse dots.
+- **Multi-Buffer Code Studio**: Tabbed source file editing, AST symbol outline drawer, character/line telemetry, and one-click disk persistence.
+
 
 ---
 

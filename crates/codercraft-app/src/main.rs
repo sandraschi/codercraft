@@ -58,6 +58,7 @@ pub struct CoderCraftApp {
     pub detected_display_count: usize,
 
     // Desktop UI Standard Controls
+    pub locale: codercraft_core::i18n::AppLocale,
     pub is_dark_theme: bool,
     pub is_authenticated: bool,
     pub auth_username: String,
@@ -113,6 +114,7 @@ impl CoderCraftApp {
             enable_quad_viewports: false,
             detected_display_count: 4,
 
+            locale: codercraft_core::i18n::AppLocale::default(),
             is_dark_theme: true,
             is_authenticated: false,
             auth_username: "admin".to_string(),
@@ -159,12 +161,13 @@ impl eframe::App for CoderCraftApp {
         // 1. TOP MENU BAR
         egui::Panel::top("desktop_menu_bar").show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("Open Workspace...").clicked() {
+                let loc = self.locale;
+                ui.menu_button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::File, loc), |ui| {
+                    if ui.button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::OpenWorkspace, loc)).clicked() {
                         self.status_msg = "Select a repo from the left sidebar".to_string();
                         ui.close();
                     }
-                    if ui.button("Save Active Buffer (Ctrl+S)").clicked() {
+                    if ui.button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::SaveActiveBuffer, loc)).clicked() {
                         if let Some(buf) = self.open_buffers.get_mut(self.active_buffer_idx) {
                             if let Ok(()) = buf.save() {
                                 self.status_msg = format!("Saved buffer: {}", buf.file_name);
@@ -172,30 +175,30 @@ impl eframe::App for CoderCraftApp {
                         }
                         ui.close();
                     }
-                    if ui.button("Fleet Project Depot...").clicked() {
+                    if ui.button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::FleetProjectDepot, loc)).clicked() {
                         self.current_screen = StudioScreenMode::FleetDepot;
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("Exit").clicked() {
+                    if ui.button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::Exit, loc)).clicked() {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
 
-                ui.menu_button("Screens", |ui| {
-                    if ui.button("💻 IDE Editor Studio (Display 1)").clicked() {
+                ui.menu_button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::Screens, loc), |ui| {
+                    if ui.button(format!("💻 {}", codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::IdeStudio, loc))).clicked() {
                         self.current_screen = StudioScreenMode::IdeStudio;
                         ui.close();
                     }
-                    if ui.button("🚀 Fleet Project Depot (Display 4)").clicked() {
+                    if ui.button(format!("🚀 {}", codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::FleetDepotScreen, loc))).clicked() {
                         self.current_screen = StudioScreenMode::FleetDepot;
                         ui.close();
                     }
-                    if ui.button("🐝 Stigmergic Swarm Supervisor (Display 3)").clicked() {
+                    if ui.button(format!("🐝 {}", codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::SwarmSupervisor, loc))).clicked() {
                         self.current_screen = StudioScreenMode::SwarmSupervisor;
                         ui.close();
                     }
-                    if ui.button("🖥️ Multi-Display Quad Layout").clicked() {
+                    if ui.button(format!("🖥️ {}", codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::QuadDisplayConfig, loc))).clicked() {
                         self.current_screen = StudioScreenMode::QuadDisplayConfig;
                         ui.close();
                     }
@@ -216,20 +219,20 @@ impl eframe::App for CoderCraftApp {
                     }
                 });
 
-                ui.menu_button("Agent Mode", |ui| {
-                    if ui.button("🔨 Switch to Build Mode").clicked() {
+                ui.menu_button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::AgentMode, loc), |ui| {
+                    if ui.button(format!("🔨 {}", codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::BuildMode, loc))).clicked() {
                         self.agent_session.set_mode(AgentMode::Build);
                         self.status_msg = "Agent mode: BUILD (Active code modification enabled)".to_string();
                         ui.close();
                     }
-                    if ui.button("📋 Switch to Plan Mode").clicked() {
+                    if ui.button(format!("📋 {}", codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::PlanMode, loc))).clicked() {
                         self.agent_session.set_mode(AgentMode::Plan);
                         self.status_msg = "Agent mode: PLAN (Read-only exploration & roadmap synthesis)".to_string();
                         ui.close();
                     }
                 });
 
-                ui.menu_button("View", |ui| {
+                ui.menu_button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::View, loc), |ui| {
                     ui.checkbox(&mut self.show_left_sidebar, "Left Sidebar (Workspaces & Symbols)");
                     ui.checkbox(&mut self.show_right_sidebar, "Right Sidebar (Code Editor & Logs)");
                     ui.separator();
@@ -240,18 +243,18 @@ impl eframe::App for CoderCraftApp {
                     }
                 });
 
-                ui.menu_button("Tools", |ui| {
-                    if ui.button("Step Stigmergic Swarm").clicked() {
+                ui.menu_button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::Tools, loc), |ui| {
+                    if ui.button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::StepSwarm, loc)).clicked() {
                         self.swarm_ledger.step_simulation();
                         self.status_msg = "Swarm simulation stepped".to_string();
                         ui.close();
                     }
-                    if ui.button("Probe Fleet TCP Ports").clicked() {
+                    if ui.button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::ProbeFleetPorts, loc)).clicked() {
                         self.core.fleet_depot.probe_ports();
                         self.status_msg = "All 12 fleet craft ports probed".to_string();
                         ui.close();
                     }
-                    if ui.button("Scan Instructions (AGENTS.md)").clicked() {
+                    if ui.button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::ScanInstructions, loc)).clicked() {
                         let inst = CoderCraftCore::discover_instructions(&self.selected_repo);
                         let found = [
                             inst.agents_md.map(|_| "AGENTS.md"),
@@ -263,9 +266,9 @@ impl eframe::App for CoderCraftApp {
                     }
                 });
 
-                ui.menu_button("Security", |ui| {
+                ui.menu_button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::Security, loc), |ui| {
                     if self.is_authenticated {
-                        ui.label(format!("Signed in as: {}", self.auth_username));
+                        ui.label(format!("{}: {}", codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::Authenticated, loc), self.auth_username));
                         if ui.button("Sign Out").clicked() {
                             self.is_authenticated = false;
                             self.status_msg = "Logged out".to_string();
@@ -279,7 +282,7 @@ impl eframe::App for CoderCraftApp {
                     }
                 });
 
-                ui.menu_button("Help", |ui| {
+                ui.menu_button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::Help, loc), |ui| {
                     if ui.button("📖 Architecture & Features Manual").clicked() {
                         self.active_help_tab = 0;
                         self.show_about_dialog = true;
@@ -314,6 +317,17 @@ impl eframe::App for CoderCraftApp {
 
                 // Right-aligned quick toggles & badges
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let cur_loc = self.locale;
+                    let loc_label = format!("{} {}", cur_loc.flag(), cur_loc.code().to_uppercase());
+                    egui::ComboBox::from_id_salt("topbar_locale_selector")
+                        .selected_text(loc_label)
+                        .show_ui(ui, |ui| {
+                            for loc_item in codercraft_core::i18n::AppLocale::all() {
+                                let text = format!("{} {}", loc_item.flag(), loc_item.display_name());
+                                let _ = ui.selectable_value(&mut self.locale, *loc_item, text);
+                            }
+                        });
+
                     let theme_icon = if self.is_dark_theme { "🌙 Dark" } else { "☀ Light" };
                     if ui.button(theme_icon).clicked() {
                         self.is_dark_theme = !self.is_dark_theme;

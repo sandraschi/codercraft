@@ -16,6 +16,8 @@
 #![deny(clippy::unimplemented)]
 #![deny(clippy::todo)]
 
+pub mod i18n;
+
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};

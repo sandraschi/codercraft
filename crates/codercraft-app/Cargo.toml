@@ -18,3 +18,4 @@ serde_json.workspace = true
 tokio.workspace = true
 eframe.workspace = true
 egui.workspace = true
+clap.workspace = true

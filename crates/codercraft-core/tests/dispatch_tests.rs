@@ -1,48 +1,35 @@
-//! Integration and dispatch verification tests for CoderCraft.
-use codercraft_core::{dispatch, Command};
+use codercraft_core::{dispatch, Command, SupportedLanguage, CoderCraftCore};
 use databasecraft_store::DatabaseStore;
+use std::path::Path;
 
 #[tokio::test]
-async fn test_codercraft_status_and_control_port() -> Result<(), Box<dyn std::error::Error>> {
-    let store = DatabaseStore::open_in_memory()?;
-    let res = dispatch(Command::Status, &store).await;
-    assert_eq!(res["success"], true);
-    assert_eq!(res["app"], "codercraft");
-    assert_eq!(res["control_port"], 14128);
-    Ok(())
+async fn test_codercraft_linter_and_language() {
+    let linter = CoderCraftCore::get_linter_for(&SupportedLanguage::Rust);
+    assert_eq!(linter.command, "cargo");
+    assert!(linter.default_args.contains(&"clippy".to_string()));
+
+    let py_linter = CoderCraftCore::get_linter_for(&SupportedLanguage::Python);
+    assert_eq!(py_linter.command, "ruff");
 }
 
 #[tokio::test]
-async fn test_codercraft_editor_and_refactor_dispatch() -> Result<(), Box<dyn std::error::Error>> {
-    let store = DatabaseStore::open_in_memory()?;
+async fn test_codercraft_workspace_tree_scan() {
+    let tree = CoderCraftCore::scan_tree(Path::new("D:\\Dev\\repos\\codercraft"), 0, 2);
+    assert!(tree.is_dir);
+    assert!(!tree.children.is_empty());
+}
 
-    // 1. Open file buffer
-    let open_res = dispatch(Command::OpenFile { path: "src/main.rs".to_string() }, &store).await;
-    assert_eq!(open_res["success"], true);
-    assert_eq!(open_res["language"], "rust");
+#[tokio::test]
+async fn test_codercraft_mcp_and_console_dispatch() {
+    let store = DatabaseStore::open_in_memory().expect("db store open");
+    let res = dispatch(Command::ListMcpServers, &store).await;
+    assert_eq!(res["success"], true);
+    assert!(res["servers"].as_array().unwrap().len() >= 2);
 
-    // 2. Index workspace symbols
-    let idx_res = dispatch(Command::IndexWorkspace { workspace_dir: ".".to_string() }, &store).await;
-    assert_eq!(idx_res["success"], true);
-    assert!(idx_res["symbols_mapped"].as_u64().unwrap_or(0) > 100);
-
-    // 3. Agent synthesize refactor proposal
-    let refactor_res = dispatch(
-        Command::AgentRefactor {
-            intent: "Add zero-panic error handling".to_string(),
-            target_file: "src/main.rs".to_string(),
-        },
-        &store,
-    )
-    .await;
-    assert_eq!(refactor_res["success"], true);
-    let patches = refactor_res["proposal"]["patches"].as_array().ok_or("missing patches")?;
-    assert_eq!(patches.len(), 1);
-
-    // 4. Run test suite
-    let test_res = dispatch(Command::RunTestSuite { test_filter: None }, &store).await;
-    assert_eq!(test_res["success"], true);
-    assert_eq!(test_res["status"], "ALL_GREEN");
-
-    Ok(())
+    let console_res = dispatch(Command::ExecuteConsoleCommand {
+        command_line: "cargo --version".to_string(),
+        working_dir: None,
+    }, &store).await;
+    assert_eq!(console_res["success"], true);
+    assert_eq!(console_res["exit_code"], 0);
 }

@@ -33,16 +33,43 @@ enum Commands {
     Open {
         path: String,
     },
-    /// Index workspace AST symbols, call-graph, and vector embeddings
+    /// Read lines from a file
+    Read {
+        path: String,
+        #[arg(long)]
+        start: Option<usize>,
+        #[arg(long)]
+        end: Option<usize>,
+    },
+    /// Grep text pattern across workspace files
+    Grep {
+        query: String,
+        #[arg(default_value = ".")]
+        workspace: String,
+    },
+    /// Index workspace AST symbols, instructions, and file tree
     Index {
         #[arg(default_value = ".")]
         workspace: String,
     },
-    /// Synthesize autonomous code refactoring proposal
+    /// Generate architectural implementation plan (Plan Mode)
+    Plan {
+        goal: String,
+        #[arg(default_value = ".")]
+        workspace: String,
+    },
+    /// Synthesize autonomous code refactoring proposal (Build Mode)
     Refactor {
         intent: String,
         #[arg(long, default_value = "src/main.rs")]
         target: String,
+    },
+    /// Run active linter (clippy, ruff, biome)
+    Lint {
+        #[arg(default_value = ".")]
+        workspace: String,
+        #[arg(long)]
+        fix: bool,
     },
     /// Execute workspace automated test suite
     Test {
@@ -77,13 +104,29 @@ fn main() {
             let res = rt.block_on(dispatch(Command::OpenFile { path }, &store));
             println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
         }
+        Some(Commands::Read { path, start, end }) => {
+            let res = rt.block_on(dispatch(Command::ReadFileRange { path, start_line: start, end_line: end }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::Grep { query, workspace }) => {
+            let res = rt.block_on(dispatch(Command::GrepSearch { root: workspace, query }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
         Some(Commands::Index { workspace }) => {
             let res = rt.block_on(dispatch(Command::IndexWorkspace { workspace_dir: workspace }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::Plan { goal, workspace }) => {
+            let res = rt.block_on(dispatch(Command::AgentPlan { goal, workspace_dir: workspace }, &store));
             println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
         }
         Some(Commands::Refactor { intent, target }) => {
             let res = rt.block_on(dispatch(Command::AgentRefactor { intent, target_file: target }, &store));
             println!("{}", serde_json::to_string_pretty(&res["proposal"]).unwrap_or_default());
+        }
+        Some(Commands::Lint { workspace, fix }) => {
+            let res = rt.block_on(dispatch(Command::RunLinter { workspace_dir: workspace, auto_fix: fix }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
         }
         Some(Commands::Test { filter }) => {
             let res = rt.block_on(dispatch(Command::RunTestSuite { test_filter: filter }, &store));
@@ -102,31 +145,44 @@ fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
     let mut stdout = std::io::stdout();
 
     for line in stdin.lock().lines() {
-        let line = match line {
+        let raw = match line {
             Ok(l) => l,
             Err(_) => break,
         };
-        let trimmed = line.trim();
+        let trimmed = raw.trim();
         if trimmed.is_empty() {
             continue;
         }
 
-        let req: Value = match serde_json::from_str(trimmed) {
+        let parsed: Value = match serde_json::from_str(trimmed) {
             Ok(v) => v,
-            Err(_) => continue,
+            Err(e) => {
+                let err_resp = json!({
+                    "jsonrpc": "2.0",
+                    "id": Value::Null,
+                    "error": { "code": -32700, "message": format!("Parse error: {e}") }
+                });
+                let _ = writeln!(stdout, "{}", err_resp);
+                let _ = stdout.flush();
+                continue;
+            }
         };
 
-        let id = req.get("id").cloned().unwrap_or(Value::Null);
-        let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
+        let id = parsed.get("id").cloned().unwrap_or(Value::Null);
+        let method = parsed.get("method").and_then(|m| m.as_str()).unwrap_or("");
+        let params = parsed.get("params").cloned().unwrap_or_else(|| json!({}));
 
-        let resp = match method {
+        let response = match method {
             "initialize" => json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": { "tools": {} },
-                    "serverInfo": { "name": "codercraft-mcp", "version": APP_VERSION }
+                    "serverInfo": {
+                        "name": "codercraft",
+                        "version": APP_VERSION
+                    }
                 }
             }),
             "tools/list" => json!({
@@ -134,10 +190,14 @@ fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
                 "id": id,
                 "result": {
                     "tools": [
-                        { "name": "code_status", "description": "Check CoderCraft engine status", "inputSchema": { "type": "object", "properties": {} } },
                         {
-                            "name": "code_open_file",
-                            "description": "Open and inspect source file buffer",
+                            "name": "codercraft_status",
+                            "description": "Check CoderCraft engine status, active language, and connected MCP servers.",
+                            "inputSchema": { "type": "object", "properties": {} }
+                        },
+                        {
+                            "name": "codercraft_open_file",
+                            "description": "Open and inspect source file buffer metadata.",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": { "path": { "type": "string" } },
@@ -145,51 +205,199 @@ fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
                             }
                         },
                         {
-                            "name": "code_refactor",
-                            "description": "Synthesize autonomous AST code refactoring proposal",
+                            "name": "codercraft_read_file",
+                            "description": "Read line range from file.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "path": { "type": "string" },
+                                    "start_line": { "type": "integer" },
+                                    "end_line": { "type": "integer" }
+                                },
+                                "required": ["path"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_write_file",
+                            "description": "Write or overwrite content to file.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "path": { "type": "string" },
+                                    "content": { "type": "string" }
+                                },
+                                "required": ["path", "content"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_apply_edit",
+                            "description": "Replace exact target block with replacement string in file.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "path": { "type": "string" },
+                                    "target": { "type": "string" },
+                                    "replacement": { "type": "string" }
+                                },
+                                "required": ["path", "target", "replacement"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_grep",
+                            "description": "Search workspace files for matching text.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "root": { "type": "string" },
+                                    "query": { "type": "string" }
+                                },
+                                "required": ["root", "query"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_index_workspace",
+                            "description": "Index workspace directory, instruction files, and tree.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": { "workspace_dir": { "type": "string" } },
+                                "required": ["workspace_dir"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_plan",
+                            "description": "Generate multi-step architectural implementation plan (Plan Mode).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "goal": { "type": "string" },
+                                    "workspace_dir": { "type": "string" }
+                                },
+                                "required": ["goal", "workspace_dir"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_refactor",
+                            "description": "Synthesize autonomous AST code refactoring proposal (Build Mode).",
                             "inputSchema": {
                                 "type": "object",
                                 "properties": {
                                     "intent": { "type": "string" },
-                                    "target": { "type": "string" }
+                                    "target_file": { "type": "string" }
                                 },
-                                "required": ["intent", "target"]
+                                "required": ["intent", "target_file"]
                             }
                         },
-                        { "name": "code_run_tests", "description": "Run workspace verification test suite", "inputSchema": { "type": "object", "properties": {} } }
+                        {
+                            "name": "codercraft_lint",
+                            "description": "Execute active linter on workspace.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "workspace_dir": { "type": "string" },
+                                    "auto_fix": { "type": "boolean" }
+                                },
+                                "required": ["workspace_dir"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_shell",
+                            "description": "Execute shell command in workspace sandbox.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "command_line": { "type": "string" },
+                                    "working_dir": { "type": "string" }
+                                },
+                                "required": ["command_line"]
+                            }
+                        }
                     ]
                 }
             }),
             "tools/call" => {
-                let params = req.get("params").cloned().unwrap_or(Value::Null);
-                let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
 
-                let tool_res = match tool_name {
-                    "code_status" => rt.block_on(dispatch(Command::Status, store)),
-                    "code_open_file" => {
-                        let path = args["path"].as_str().unwrap_or("src/main.rs").to_string();
-                        rt.block_on(dispatch(Command::OpenFile { path }, store))
+                let tool_output = match name {
+                    "codercraft_status" => rt.block_on(dispatch(Command::Status, store)),
+                    "codercraft_open_file" => {
+                        let path = args.get("path").and_then(|p| p.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(Command::OpenFile { path: path.to_string() }, store))
                     }
-                    "code_refactor" => {
-                        let intent = args["intent"].as_str().unwrap_or("Refactor").to_string();
-                        let target = args["target"].as_str().unwrap_or("src/main.rs").to_string();
-                        rt.block_on(dispatch(Command::AgentRefactor { intent, target_file: target }, store))
+                    "codercraft_read_file" => {
+                        let path = args.get("path").and_then(|p| p.as_str()).unwrap_or("");
+                        let start = args.get("start_line").and_then(|s| s.as_u64()).map(|s| s as usize);
+                        let end = args.get("end_line").and_then(|e| e.as_u64()).map(|e| e as usize);
+                        rt.block_on(dispatch(Command::ReadFileRange { path: path.to_string(), start_line: start, end_line: end }, store))
                     }
-                    "code_run_tests" => rt.block_on(dispatch(Command::RunTestSuite { test_filter: None }, store)),
-                    unknown => json!({ "success": false, "error": format!("Unknown tool '{unknown}'") })
+                    "codercraft_write_file" => {
+                        let path = args.get("path").and_then(|p| p.as_str()).unwrap_or("");
+                        let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(Command::WriteFile { path: path.to_string(), content: content.to_string() }, store))
+                    }
+                    "codercraft_apply_edit" => {
+                        let path = args.get("path").and_then(|p| p.as_str()).unwrap_or("");
+                        let target = args.get("target").and_then(|t| t.as_str()).unwrap_or("");
+                        let replacement = args.get("replacement").and_then(|r| r.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(Command::ApplyHunkEdit {
+                            path: path.to_string(),
+                            target: target.to_string(),
+                            replacement: replacement.to_string(),
+                        }, store))
+                    }
+                    "codercraft_grep" => {
+                        let root = args.get("root").and_then(|r| r.as_str()).unwrap_or(".");
+                        let query = args.get("query").and_then(|q| q.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(Command::GrepSearch { root: root.to_string(), query: query.to_string() }, store))
+                    }
+                    "codercraft_index_workspace" => {
+                        let dir = args.get("workspace_dir").and_then(|d| d.as_str()).unwrap_or(".");
+                        rt.block_on(dispatch(Command::IndexWorkspace { workspace_dir: dir.to_string() }, store))
+                    }
+                    "codercraft_plan" => {
+                        let goal = args.get("goal").and_then(|g| g.as_str()).unwrap_or("");
+                        let dir = args.get("workspace_dir").and_then(|d| d.as_str()).unwrap_or(".");
+                        rt.block_on(dispatch(Command::AgentPlan { goal: goal.to_string(), workspace_dir: dir.to_string() }, store))
+                    }
+                    "codercraft_refactor" => {
+                        let intent = args.get("intent").and_then(|i| i.as_str()).unwrap_or("");
+                        let target = args.get("target_file").and_then(|t| t.as_str()).unwrap_or("src/main.rs");
+                        rt.block_on(dispatch(Command::AgentRefactor { intent: intent.to_string(), target_file: target.to_string() }, store))
+                    }
+                    "codercraft_lint" => {
+                        let dir = args.get("workspace_dir").and_then(|d| d.as_str()).unwrap_or(".");
+                        let fix = args.get("auto_fix").and_then(|f| f.as_bool()).unwrap_or(false);
+                        rt.block_on(dispatch(Command::RunLinter { workspace_dir: dir.to_string(), auto_fix: fix }, store))
+                    }
+                    "codercraft_shell" => {
+                        let cmd_str = args.get("command_line").and_then(|c| c.as_str()).unwrap_or("");
+                        let wd = args.get("working_dir").and_then(|w| w.as_str()).map(|w| w.to_string());
+                        rt.block_on(dispatch(Command::ExecuteConsoleCommand { command_line: cmd_str.to_string(), working_dir: wd }, store))
+                    }
+                    _ => json!({ "error": format!("Unknown tool: {name}") }),
                 };
 
                 json!({
                     "jsonrpc": "2.0",
                     "id": id,
-                    "result": { "content": [{ "type": "text", "text": tool_res.to_string() }] }
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": serde_json::to_string_pretty(&tool_output).unwrap_or_default()
+                            }
+                        ]
+                    }
                 })
             }
-            _ => json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": "Method not found" } })
+            _ => json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": { "code": -32601, "message": format!("Method not found: {method}") }
+            }),
         };
 
-        let _ = writeln!(stdout, "{}", resp.to_string());
+        let _ = writeln!(stdout, "{}", response);
         let _ = stdout.flush();
     }
 }

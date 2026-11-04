@@ -24,12 +24,47 @@ async fn test_codercraft_mcp_and_console_dispatch() {
     let store = DatabaseStore::open_in_memory().expect("db store open");
     let res = dispatch(Command::ListMcpServers, &store).await;
     assert_eq!(res["success"], true);
-    assert!(res["servers"].as_array().unwrap().len() >= 2);
+    assert!(res["servers"].as_array().expect("servers array").len() >= 2);
 
     let console_res = dispatch(Command::ExecuteConsoleCommand {
-        command_line: "cargo --version".to_string(),
+        command_line: "Write-Output 'codercraft-ok'".to_string(),
         working_dir: None,
     }, &store).await;
     assert_eq!(console_res["success"], true);
     assert_eq!(console_res["exit_code"], 0);
+}
+
+#[tokio::test]
+async fn test_codercraft_plan_and_instructions() {
+    let store = DatabaseStore::open_in_memory().expect("db store open");
+    let plan_res = dispatch(Command::AgentPlan {
+        goal: "Implement zero-panic containment".to_string(),
+        workspace_dir: "D:\\Dev\\repos\\codercraft".to_string(),
+    }, &store).await;
+    assert_eq!(plan_res["success"], true);
+    assert!(plan_res["plan"].as_str().expect("plan str").contains("Architectural Implementation Plan"));
+
+    let inst_res = dispatch(Command::DiscoverInstructions {
+        workspace_dir: "D:\\Dev\\repos\\codercraft".to_string(),
+    }, &store).await;
+    assert_eq!(inst_res["success"], true);
+}
+
+#[tokio::test]
+async fn test_codercraft_read_range_and_grep() {
+    let store = DatabaseStore::open_in_memory().expect("db store open");
+    let read_res = dispatch(Command::ReadFileRange {
+        path: "D:\\Dev\\repos\\codercraft\\Cargo.toml".to_string(),
+        start_line: Some(1),
+        end_line: Some(5),
+    }, &store).await;
+    assert_eq!(read_res["success"], true);
+    assert!(read_res["content"].as_str().expect("content str").contains("[workspace]"));
+
+    let grep_res = dispatch(Command::GrepSearch {
+        root: "D:\\Dev\\repos\\codercraft\\crates\\codercraft-core".to_string(),
+        query: "CoderCraftCore".to_string(),
+    }, &store).await;
+    assert_eq!(grep_res["success"], true);
+    assert!(grep_res["match_count"].as_u64().expect("match_count") > 0);
 }

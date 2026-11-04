@@ -3,15 +3,20 @@
 //! Subsumes OpenCode, Cursor, and Zed into a single sovereign ArtCraft application.
 //! Features parity with Claude Desktop / AGY:
 //! - Multi-language support (Rust, Python, TypeScript, Go, C++)
-//! - Automated linter setup (Clippy, Ruff, Biome)
+//! - Automated linter setup (Clippy, Ruff, Biome, golangci-lint, clang-tidy)
 //! - Repository and project explorer with recursive file tree
-//! - MCP server registry & configuration management
-//! - Local (Ollama) and Cloud (Claude, GPT, Gemini) LLM configuration
+//! - Workspace instruction discovery (AGENTS.md, CLAUDE.md, .cursorrules)
+//! - Local (Ollama) and Cloud (Claude, GPT, DeepSeek) LLM configuration
 //! - Stigmergic tool calling, logging, and integrated terminal/bash execution
+#![deny(clippy::unwrap_used)]
+#![deny(clippy::expect_used)]
+#![deny(clippy::panic)]
+#![deny(clippy::unimplemented)]
+#![deny(clippy::todo)]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use codercraft_agent::AgentEngine;
+use codercraft_agent::{AgentEngine, AgentMode, AgentSession};
 use databasecraft_store::DatabaseStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -47,7 +52,7 @@ pub struct McpServerEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
-    pub provider: String, // "Ollama", "Anthropic", "OpenAI", "Gemini"
+    pub provider: String, // "Ollama", "Anthropic", "OpenAI", "DeepSeek"
     pub endpoint: String,
     pub model_name: String,
     pub api_key_configured: bool,
@@ -63,13 +68,41 @@ pub struct FileTreeNode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceInstructions {
+    pub agents_md: Option<String>,
+    pub claude_md: Option<String>,
+    pub cursor_rules: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "command", content = "params")]
 pub enum Command {
     Status,
     OpenFile {
         path: String,
     },
+    ReadFileRange {
+        path: String,
+        start_line: Option<usize>,
+        end_line: Option<usize>,
+    },
+    WriteFile {
+        path: String,
+        content: String,
+    },
+    ApplyHunkEdit {
+        path: String,
+        target: String,
+        replacement: String,
+    },
+    GrepSearch {
+        root: String,
+        query: String,
+    },
     IndexWorkspace {
+        workspace_dir: String,
+    },
+    DiscoverInstructions {
         workspace_dir: String,
     },
     RunTestSuite {
@@ -101,9 +134,9 @@ pub enum Command {
         intent: String,
         target_file: String,
     },
-    ApplyPatch {
-        target_file: String,
-        diff: String,
+    AgentPlan {
+        goal: String,
+        workspace_dir: String,
     },
 }
 
@@ -113,7 +146,14 @@ pub struct CoderCraftCore {
     pub llm_config: LlmConfig,
 }
 
+impl Default for CoderCraftCore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CoderCraftCore {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             active_language: SupportedLanguage::Rust,
@@ -132,6 +172,13 @@ impl CoderCraftCore {
                     env: HashMap::new(),
                     is_enabled: true,
                 },
+                McpServerEntry {
+                    name: "gamecraft".to_string(),
+                    command: "D:\\Dev\\repos\\gamecraft\\target\\debug\\gamecraft-mcp.exe".to_string(),
+                    args: vec![],
+                    env: HashMap::new(),
+                    is_enabled: true,
+                },
             ],
             llm_config: LlmConfig {
                 provider: "Ollama".to_string(),
@@ -142,6 +189,7 @@ impl CoderCraftCore {
         }
     }
 
+    #[must_use]
     pub fn scan_tree(root: &Path, depth: usize, max_depth: usize) -> FileTreeNode {
         let name = root.file_name().and_then(|n| n.to_str()).unwrap_or("root").to_string();
         let path_str = root.to_string_lossy().to_string();
@@ -183,6 +231,7 @@ impl CoderCraftCore {
         }
     }
 
+    #[must_use]
     pub fn get_linter_for(lang: &SupportedLanguage) -> LinterConfig {
         match lang {
             SupportedLanguage::Rust => LinterConfig {
@@ -217,10 +266,121 @@ impl CoderCraftCore {
             },
         }
     }
+
+    #[must_use]
+    pub fn discover_instructions(workspace_dir: &str) -> WorkspaceInstructions {
+        let root = PathBuf::from(workspace_dir);
+        let agents_path = root.join("AGENTS.md");
+        let claude_path = root.join("CLAUDE.md");
+        let cursor_path = root.join(".cursorrules");
+
+        WorkspaceInstructions {
+            agents_md: std::fs::read_to_string(agents_path).ok(),
+            claude_md: std::fs::read_to_string(claude_path).ok(),
+            cursor_rules: std::fs::read_to_string(cursor_path).ok(),
+        }
+    }
+
+    pub fn execute_shell(cmd_line: &str, working_dir: Option<&str>) -> (i32, String, String) {
+        let mut cmd = if cfg!(windows) {
+            let mut c = std::process::Command::new("powershell.exe");
+            c.args(["-NoProfile", "-NonInteractive", "-Command", cmd_line]);
+            c
+        } else {
+            let mut c = std::process::Command::new("sh");
+            c.args(["-c", cmd_line]);
+            c
+        };
+
+        if let Some(wd) = working_dir {
+            cmd.current_dir(wd);
+        }
+
+        match cmd.output() {
+            Ok(out) => {
+                let code = out.status.code().unwrap_or(-1);
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                (code, stdout, stderr)
+            }
+            Err(e) => (-1, String::new(), format!("Failed to spawn shell: {e}")),
+        }
+    }
+
+    pub fn read_file_range(path: &str, start: Option<usize>, end: Option<usize>) -> Result<String, String> {
+        let content = std::fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
+        let lines: Vec<&str> = content.lines().collect();
+        let s = start.unwrap_or(1).saturating_sub(1);
+        let e = end.unwrap_or(lines.len()).min(lines.len());
+        if s >= lines.len() {
+            return Ok(String::new());
+        }
+        Ok(lines[s..e].join("\n"))
+    }
+
+    pub fn write_file(path: &str, content: &str) -> Result<(), String> {
+        if let Some(parent) = Path::new(path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(path, content).map_err(|e| format!("Failed to write {path}: {e}"))
+    }
+
+    pub fn apply_hunk_edit(path: &str, target: &str, replacement: &str) -> Result<(), String> {
+        let content = std::fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
+        if !content.contains(target) {
+            return Err(format!("Target block not found in {path}"));
+        }
+        let updated = content.replace(target, replacement);
+        std::fs::write(path, updated).map_err(|e| format!("Failed to write {path}: {e}"))
+    }
+
+    #[must_use]
+    pub fn grep_search(root: &str, query: &str) -> Vec<(String, usize, String)> {
+        let mut results = Vec::new();
+        let path = Path::new(root);
+        let _ = Self::grep_recursive(path, query, &mut results, 0, 50);
+        results
+    }
+
+    fn grep_recursive(
+        dir: &Path,
+        query: &str,
+        results: &mut Vec<(String, usize, String)>,
+        depth: usize,
+        max_matches: usize,
+    ) -> std::io::Result<()> {
+        if depth > 5 || results.len() >= max_matches {
+            return Ok(());
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') || name == "target" || name == "node_modules" {
+                    continue;
+                }
+                if p.is_dir() {
+                    let _ = Self::grep_recursive(&p, query, results, depth + 1, max_matches);
+                } else if p.is_file() {
+                    if let Ok(content) = std::fs::read_to_string(&p) {
+                        for (idx, line) in content.lines().enumerate() {
+                            if line.contains(query) {
+                                results.push((p.to_string_lossy().to_string(), idx + 1, line.to_string()));
+                                if results.len() >= max_matches {
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
-    let core = CoderCraftCore::new();
+    let mut core = CoderCraftCore::new();
 
     match cmd {
         Command::Status => {
@@ -241,69 +401,114 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
             })
         }
         Command::OpenFile { path } => {
+            let exists = Path::new(&path).exists();
+            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
             json!({
-                "success": true,
+                "success": exists,
                 "path": path,
                 "language": if path.ends_with(".rs") { "rust" } else if path.ends_with(".py") { "python" } else { "text" },
-                "line_count": 420,
-                "checksum": "sha256_mock_f812",
-                "status": "BUFFER_MAPPED"
+                "size_bytes": size,
+                "status": if exists { "BUFFER_MAPPED" } else { "FILE_NOT_FOUND" }
+            })
+        }
+        Command::ReadFileRange { path, start_line, end_line } => {
+            match CoderCraftCore::read_file_range(&path, start_line, end_line) {
+                Ok(content) => json!({ "success": true, "path": path, "content": content }),
+                Err(e) => json!({ "success": false, "error": e }),
+            }
+        }
+        Command::WriteFile { path, content } => {
+            match CoderCraftCore::write_file(&path, &content) {
+                Ok(()) => json!({ "success": true, "path": path, "status": "SAVED" }),
+                Err(e) => json!({ "success": false, "error": e }),
+            }
+        }
+        Command::ApplyHunkEdit { path, target, replacement } => {
+            match CoderCraftCore::apply_hunk_edit(&path, &target, &replacement) {
+                Ok(()) => json!({ "success": true, "path": path, "status": "HUNK_APPLIED" }),
+                Err(e) => json!({ "success": false, "error": e }),
+            }
+        }
+        Command::GrepSearch { root, query } => {
+            let matches = CoderCraftCore::grep_search(&root, &query);
+            json!({
+                "success": true,
+                "query": query,
+                "match_count": matches.len(),
+                "matches": matches.into_iter().map(|(p, line, text)| {
+                    json!({ "path": p, "line": line, "text": text })
+                }).collect::<Vec<_>>()
             })
         }
         Command::IndexWorkspace { workspace_dir } => {
+            let tree = CoderCraftCore::scan_tree(Path::new(&workspace_dir), 0, 3);
+            let instructions = CoderCraftCore::discover_instructions(&workspace_dir);
             json!({
                 "success": true,
                 "workspace": workspace_dir,
-                "files_indexed": 38,
-                "symbols_mapped": 240,
-                "call_graph_nodes": 612,
-                "vector_embeddings_indexed": 38,
-                "status": "INDEX_COMPLETE"
+                "file_count": tree.children.len(),
+                "instructions_found": {
+                    "agents_md": instructions.agents_md.is_some(),
+                    "claude_md": instructions.claude_md.is_some(),
+                    "cursorrules": instructions.cursor_rules.is_some(),
+                },
+                "status": "INDEXED"
             })
         }
-        Command::RunTestSuite { test_filter } => {
+        Command::DiscoverInstructions { workspace_dir } => {
+            let instructions = CoderCraftCore::discover_instructions(&workspace_dir);
             json!({
                 "success": true,
-                "filter": test_filter,
-                "tests_passed": 14,
-                "tests_failed": 0,
-                "duration_ms": 18,
-                "status": "ALL_GREEN"
+                "workspace": workspace_dir,
+                "instructions": instructions
             })
         }
         Command::ScanWorkspaceTree { root_path, max_depth } => {
-            let max_d = max_depth.unwrap_or(3);
-            let tree = CoderCraftCore::scan_tree(Path::new(&root_path), 0, max_d);
+            let depth = max_depth.unwrap_or(2);
+            let tree = CoderCraftCore::scan_tree(Path::new(&root_path), 0, depth);
             json!({
                 "success": true,
                 "tree": tree
             })
         }
         Command::SelectLanguage { language } => {
-            let linter = CoderCraftCore::get_linter_for(&language);
+            core.active_language = language;
             json!({
                 "success": true,
-                "selected_language": language,
-                "linter_configured": linter
+                "language": core.active_language
             })
         }
         Command::RunLinter { workspace_dir, auto_fix } => {
-            let linter = CoderCraftCore::get_linter_for(&SupportedLanguage::Rust);
+            let linter = CoderCraftCore::get_linter_for(&core.active_language);
+            let args = if auto_fix { &linter.auto_fix_args } else { &linter.default_args };
+            let cmd_str = format!("{} {}", linter.command, args.join(" "));
+            let (code, stdout, stderr) = CoderCraftCore::execute_shell(&cmd_str, Some(&workspace_dir));
             json!({
-                "success": true,
-                "workspace": workspace_dir,
-                "linter": linter.command,
-                "auto_fix": auto_fix,
-                "issues_found": 0,
-                "status": "CLEAN"
+                "success": code == 0,
+                "exit_code": code,
+                "stdout": stdout,
+                "stderr": stderr,
+                "command": cmd_str,
+                "linter": linter.command
+            })
+        }
+        Command::RunTestSuite { test_filter } => {
+            let filter_arg = test_filter.unwrap_or_default();
+            let cmd_str = format!("cargo test {filter_arg}");
+            let (code, stdout, stderr) = CoderCraftCore::execute_shell(&cmd_str, None);
+            json!({
+                "success": code == 0,
+                "exit_code": code,
+                "stdout": stdout,
+                "stderr": stderr,
+                "command": cmd_str
             })
         }
         Command::ConfigureMcpServer { entry } => {
+            core.mcp_servers.push(entry);
             json!({
                 "success": true,
-                "mcp_server": entry.name,
-                "is_enabled": entry.is_enabled,
-                "status": "CONFIG_SAVED"
+                "total_servers": core.mcp_servers.len()
             })
         }
         Command::ListMcpServers => {
@@ -313,21 +518,19 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
             })
         }
         Command::ExecuteConsoleCommand { command_line, working_dir } => {
+            let (code, stdout, stderr) = CoderCraftCore::execute_shell(&command_line, working_dir.as_deref());
             json!({
-                "success": true,
-                "command": command_line,
-                "working_dir": working_dir.unwrap_or_else(|| ".".to_string()),
-                "exit_code": 0,
-                "output": "Command executed successfully in sovereign container sandbox."
+                "success": code == 0,
+                "exit_code": code,
+                "stdout": stdout,
+                "stderr": stderr
             })
         }
         Command::ConfigureLlm { config } => {
+            core.llm_config = config;
             json!({
                 "success": true,
-                "provider": config.provider,
-                "model": config.model_name,
-                "endpoint": config.endpoint,
-                "status": "CONNECTED"
+                "llm_config": core.llm_config
             })
         }
         Command::AgentRefactor { intent, target_file } => {
@@ -337,13 +540,14 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
                 "proposal": proposal
             })
         }
-        Command::ApplyPatch { target_file, diff } => {
+        Command::AgentPlan { goal, workspace_dir } => {
+            let mut session = AgentSession::new("session-plan", AgentMode::Plan, &workspace_dir);
+            let plan_text = session.generate_step_plan(&goal);
             json!({
                 "success": true,
-                "target_file": target_file,
-                "patch_applied": true,
-                "diff_preview": diff,
-                "ast_validated": true
+                "mode": "Plan",
+                "goal": goal,
+                "plan": plan_text
             })
         }
     }

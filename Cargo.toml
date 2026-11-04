@@ -26,3 +26,4 @@ egui = "0.37"
 chrono = { version = "0.4", features = ["serde"] }
 databasecraft-store = { path = "../databasecraft/crates/databasecraft-store" }
 databasecraft-core = { path = "../databasecraft/crates/databasecraft-core" }
+craft-ai-core = { path = "../craft-ai/crates/craft-ai-core" }

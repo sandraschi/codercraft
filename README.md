@@ -66,6 +66,18 @@ For complete documentation, see [`HELP.md`](file:///D:/Dev/repos/codercraft/HELP
 .\target\debug\codercraft-cli.exe symbols "crates/codercraft-core/src/lib.rs"
 ```
 
+## Status — does today / next week / non-goals
+
+**Does today:** 4-crate Rust workspace (core/agent split) + root
+PRD/SPEC/HELP/AGENTS; deterministic edit + compiler-gatekeeper concept;
+7 test fns.
+
+**Next week:** scope-cut PRD (editor milestone 1, agent milestone 2);
+headless edit-roundtrip tests; edit-roundtrip recipe (no LLM in CI).
+
+**Non-goals:** not an opencode-wrapper; no "universal server" claims
+before proof.
+
 ## Lineage — the Storytold craft-app pattern
 
 Storytold ArtCraft ([storytold/artcraft](https://github.com/storytold/artcraft) — "the IDE for artists") was the starting point. The 16 craft apps in the Storytold stable each ship one binary that is both the human CLI and the agent MCP server (stdio), headless-first, with `run.json` + report artifacts. That modus operandi and harness is what this repo implements; the code here is independent, the pattern is shared.

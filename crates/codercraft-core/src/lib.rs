@@ -1,6 +1,6 @@
 //! CoderCraft Core Library & Universal Command Bus.
 //!
-//! Subsumes OpenCode, Cursor, and Zed into a single sovereign ArtCraft application.
+//! Subsumes OpenCode, Cursor, and Zed into a single local-first ArtCraft application.
 //! Features parity with Claude Desktop / AGY:
 //! - Multi-language support (Rust, Python, TypeScript, Go, C++)
 //! - Automated linter setup (Clippy, Ruff, Biome, golangci-lint, clang-tidy)
@@ -164,7 +164,7 @@ impl FleetDepot {
                     name: "codercraft".to_string(),
                     folder_name: "codercraft".to_string(),
                     port: 14128,
-                    description: "Sovereign Agentic IDE & Universal MCP Server".to_string(),
+                    description: "Local-First Agentic IDE & Universal MCP Server".to_string(),
                     category: "IDE / DevTools".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\codercraft\\start.bat".to_string(),
                     is_running: true,
@@ -174,7 +174,7 @@ impl FleetDepot {
                     name: "databasecraft".to_string(),
                     folder_name: "databasecraft".to_string(),
                     port: 14113,
-                    description: "Sovereign Embedded SQLite + Vector RAG Storage Engine".to_string(),
+                    description: "Local Embedded SQLite + Vector RAG Storage Engine".to_string(),
                     category: "Data / Storage".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\databasecraft\\start.bat".to_string(),
                     is_running: false,
@@ -204,7 +204,7 @@ impl FleetDepot {
                     name: "appcraft".to_string(),
                     folder_name: "appcraft".to_string(),
                     port: 14114,
-                    description: "Cross-Platform Mobile & Desktop Sovereign GUI Studio".to_string(),
+                    description: "Cross-Platform Mobile & Desktop Local GUI Studio".to_string(),
                     category: "Applications".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\appcraft\\start.bat".to_string(),
                     is_running: false,
@@ -224,7 +224,7 @@ impl FleetDepot {
                     name: "writercraft".to_string(),
                     folder_name: "writercraft".to_string(),
                     port: 14124,
-                    description: "Sovereign Distraction-Free Authoring & Research Suite".to_string(),
+                    description: "Local Distraction-Free Authoring & Research Suite".to_string(),
                     category: "Authoring".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\writercraft\\start.bat".to_string(),
                     is_running: false,
@@ -921,7 +921,7 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
                 "app": "codercraft",
                 "version": APP_VERSION,
                 "port": CONTROL_PORT,
-                "summary": "CoderCraft is a 100% native Rust sovereign agentic IDE & MCP server built with egui 0.37.",
+                "summary": "CoderCraft is a 100% native Rust local-first agentic IDE & MCP server built with egui 0.37.",
                 "capabilities": [
                     "Zero-Electron native binary (~35MB RAM, <30ms startup, 144 FPS)",
                     "Dual Plan/Build agent loop with instruction discovery (AGENTS.md, CLAUDE.md)",

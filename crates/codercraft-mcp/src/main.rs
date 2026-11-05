@@ -16,7 +16,7 @@ use tokio::runtime::Runtime;
 
 #[derive(Parser)]
 #[command(name = "codercraft-cli")]
-#[command(about = "CoderCraft: Sovereign Agentic IDE & Universal CLI", version = APP_VERSION)]
+#[command(about = "CoderCraft: Local-First Agentic IDE & Universal CLI", version = APP_VERSION)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -180,7 +180,7 @@ fn main() {
         }
         None => {
             let help_res = rt.block_on(dispatch(Command::GetHelp, &store));
-            println!("CoderCraft Sovereign Agentic IDE & Studio v{APP_VERSION} (Port {CONTROL_PORT})");
+            println!("CoderCraft Local-First Agentic IDE & Studio v{APP_VERSION} (Port {CONTROL_PORT})");
             println!("{}", serde_json::to_string_pretty(&help_res).unwrap_or_default());
             println!("\nUse 'codercraft-cli compare' for Claude/OpenCode/AGY matrix, or --mcp for FastMCP server.");
         }

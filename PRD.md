@@ -4,7 +4,7 @@
 **Version**: 1.2.0  
 **Date**: 2026-11-04  
 **Author**: sandraschi fleet architecture / DeepMind AGY  
-**Domain**: Sovereign Agentic IDE, Stigmergic Code Generation, Multi-Monitor Studio  
+**Domain**: Local-First Agentic IDE, Stigmergic Code Generation, Multi-Monitor Studio  
 **Standard Port**: 14128  
 
 ---
@@ -17,7 +17,7 @@ Modern code intelligence tools suffer from severe fragmentation:
 4. **Isolated Fleet Ecosystems**: Individual applications (audio, CAD, robotics, databases) operate as detached silos rather than an integrated swarm.
 
 **CoderCraft's Solution**:
-CoderCraft is a native Rust, immediate-mode (egui 0.37 / wgpu) sovereign development environment that subsumes OpenCode, Cursor, and Zed into a single zero-panic workstation.
+CoderCraft is a native Rust, immediate-mode (egui 0.37 / wgpu) local-first development environment that subsumes OpenCode, Cursor, and Zed into a single zero-panic workstation.
 
 ---
 
@@ -56,13 +56,13 @@ CoderCraft detects and provisions workstations across up to 4 physical or virtua
 ### 3.2 Fleet Craft Project Depot
 Direct integration into all fleet applications with standardized port mappings:
 - **DatabaseCraft** (Port 14113): Embedded SQLite + Vector RAG storage.
-- **AppCraft** (Port 14114): Sovereign GUI & mobile framework.
+- **AppCraft** (Port 14114): Local GUI & mobile framework.
 - **RobotCraft** (Port 14115): URDF kinematics, Norirobotics A3, Saschibot & Noetix Bumi.
 - **MoneyCraft** (Port 14116): Double-entry ledger & crypto portfolio.
 - **DJCraft** (Port 14118): Universal DJ controller & stem separator.
 - **ModCraft** (Port 14120): Audio synthesis & tracker workstation.
 - **WriterCraft** (Port 14124): Distraction-free authoring suite.
-- **CoderCraft** (Port 14128): Sovereign agentic IDE & MCP server.
+- **CoderCraft** (Port 14128): Local-first agentic IDE & MCP server.
 - **TravelCraft** (Port 14129): Offline GIS & Baedeker navigator.
 - **MakerCraft** (Port 14130): Parametric CAD/CAM & 3D slicer.
 - **SportsCraft** (Port 14131): Biometric kinetic coach.

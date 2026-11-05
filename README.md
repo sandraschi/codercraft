@@ -1,6 +1,6 @@
-# CoderCraft — Sovereign Agentic IDE & Universal MCP Server
+# CoderCraft — Local-First Agentic IDE & Universal MCP Server
 
-**CoderCraft** is an ArtCraft-tier sovereign agentic integrated development environment (IDE) that subsumes the capabilities of **Claude Desktop, OpenCode, Cursor, Zed, and Antigravity (AGY)** into a unified, zero-runtime-tax native binary.
+**CoderCraft** is an ArtCraft-tier local-first agentic integrated development environment (IDE) that subsumes the capabilities of **Claude Desktop, OpenCode, Cursor, Zed, and Antigravity (AGY)** into a unified, zero-runtime-tax native binary.
 
 Built in 100% native Rust (`egui 0.37` + `wgpu`) on **Port 14128**, CoderCraft delivers sub-millisecond rendering, an instant (<30ms) startup time, and a minimal ~35MB RAM footprint with zero Electron bloat.
 
@@ -20,7 +20,7 @@ Built in 100% native Rust (`egui 0.37` + `wgpu`) on **Port 14128**, CoderCraft d
      - **Display 3 (Supervisor)**: Stigmergic swarm node graph & task blackboard.
      - **Display 4 (Fleet Depot)**: One-click project launcher & split diff inspector.
 4. **Fleet Craft Project Depot**:
-   - Direct mission control for all 12 sovereign Craft applications (DatabaseCraft, AppCraft, RobotCraft, MoneyCraft, DJCraft, ModCraft, WriterCraft, CoderCraft, TravelCraft, MakerCraft, SportsCraft, DemoCraft).
+   - Direct mission control for all 12 local-first Craft applications (DatabaseCraft, AppCraft, RobotCraft, MoneyCraft, DJCraft, ModCraft, WriterCraft, CoderCraft, TravelCraft, MakerCraft, SportsCraft, DemoCraft).
    - Real-time TCP socket probing measures exact network ping latencies (`● ONLINE (1ms)` / `○ OFFLINE`).
 5. **Multi-Buffer Code Studio & AST Symbol Outline**:
    - Multi-tab file editing with dirty-state tracking (`*`), instant save (`Ctrl+S`), and auto-extracted top-level function, struct, enum, and trait jump navigation.
@@ -41,7 +41,7 @@ Built in 100% native Rust (`egui 0.37` + `wgpu`) on **Port 14128**, CoderCraft d
 | **Code Editor** | Read-only artifacts | Basic file diffs | Monaco editor | **Multi-Buffer Studio with AST Symbol Jump Outline** |
 | **Fleet Project Depot** | None | Single directory | Cross-repo navigation | **Built-in Depot with live TCP port probing (12 apps)** |
 | **MCP Protocol** | Client only | Client & Server (TS) | Client & Server (Py/Node) | **FastMCP 2024-11-05 JSON-RPC Server & Client (Rust)** |
-| **Data Sovereignty** | Cloud-only | Cloud + Ollama | Cloud-driven | **100% Sovereign Offline-First (`craft-ai-core`)** |
+| **Your data** | Lives on Anthropic's servers | Cloud + your machine | Cloud-driven | **Stays on your machine (`craft-ai-core` Ollama, cloud optional)** |
 
 For complete documentation, see [`HELP.md`](file:///D:/Dev/repos/codercraft/HELP.md), [`PRD.md`](file:///D:/Dev/repos/codercraft/PRD.md), and [`SPEC.md`](file:///D:/Dev/repos/codercraft/SPEC.md).
 

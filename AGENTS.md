@@ -1,7 +1,7 @@
-# CoderCraft — Sovereign Agentic IDE & Universal MCP Server
+# CoderCraft — Local-First Agentic IDE & Universal MCP Server
 
 ## Overview
-CoderCraft is a sovereign agentic desktop development studio and MCP server built in native Rust + egui 0.37. It subsumes OpenCode, Cursor, and Zed into a single zero-panic desktop application with FastMCP JSON-RPC interoperability.
+CoderCraft is a local-first agentic desktop development studio and MCP server built in native Rust + egui 0.37. It subsumes OpenCode, Cursor, and Zed into a single zero-panic desktop application with FastMCP JSON-RPC interoperability.
 
 ## Architecture & Crates
 - `crates/codercraft-core`: File tree scanning, instruction discovery (`AGENTS.md`, `CLAUDE.md`, `.cursorrules`), linter abstraction (Clippy, Ruff, Biome), shell runner, and unified command dispatch bus.

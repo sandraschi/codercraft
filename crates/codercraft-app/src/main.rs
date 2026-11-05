@@ -9,7 +9,7 @@ use databasecraft_store::DatabaseStore;
 use serde_json::json;
 
 #[derive(Parser, Debug)]
-#[command(name = "codercraft", about = "CoderCraft Sovereign Agentic IDE", version = APP_VERSION)]
+#[command(name = "codercraft", about = "CoderCraft Local-First Agentic IDE", version = APP_VERSION)]
 struct Args {
     #[arg(long)]
     smoke: bool,

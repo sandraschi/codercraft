@@ -84,7 +84,7 @@ impl AgentSession {
                 turn_id: 1,
                 role: "system".to_string(),
                 content: format!(
-                    "CoderCraft Sovereign Agent initialized in {:?} mode for workspace: {}",
+                    "CoderCraft Local Agent initialized in {:?} mode for workspace: {}",
                     mode, workspace_dir
                 ),
                 tool_calls: vec![],

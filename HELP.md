@@ -1,14 +1,14 @@
 # CoderCraft — Comprehensive Help, Architecture & Competitive Matrix
 
 **Document Identifier**: `CRAFT-HELP-2026-CODER-003`  
-**Application**: CoderCraft (Sovereign Agentic IDE & Studio)  
+**Application**: CoderCraft (Local-First Agentic IDE & Studio)  
 **Version**: 0.2.0 | **Port**: 14128  
 
 ---
 
 ## 1. What CoderCraft Is and Does
 
-**CoderCraft** is a pure-Rust, zero-runtime-tax, immediate-mode development environment and agentic coding studio. It is designed from first principles to subsume the capabilities of **Claude Desktop, OpenCode, Cursor, and Antigravity (AGY)** into a single sovereign desktop application.
+**CoderCraft** is a pure-Rust, zero-runtime-tax, immediate-mode development environment and agentic coding studio. It is designed from first principles to subsume the capabilities of **Claude Desktop, OpenCode, Cursor, and Antigravity (AGY)** into a single local-first desktop application.
 
 ### Core Capabilities:
 1. **Zero Electron Runtime Overhead**: Built using `egui 0.37` and `wgpu`. Starts in under 30 milliseconds, consumes ~35 MB of RAM (versus 1.5–3.0 GB for Electron IDEs), and renders at a silky 60–144 FPS.
@@ -29,7 +29,7 @@
      - **Display 3 (Supervisor)**: Stigmergic swarm node graph & task blackboard.
      - **Display 4 (Fleet Depot)**: One-click project launcher & split diff inspector.
 6. **Fleet Craft Project Depot**:
-   - Embedded mission control for all 12 sovereign Craft applications (DatabaseCraft, AppCraft, RobotCraft, MoneyCraft, DJCraft, ModCraft, WriterCraft, CoderCraft, TravelCraft, MakerCraft, SportsCraft, DemoCraft).
+   - Embedded mission control for all 12 local-first Craft applications (DatabaseCraft, AppCraft, RobotCraft, MoneyCraft, DJCraft, ModCraft, WriterCraft, CoderCraft, TravelCraft, MakerCraft, SportsCraft, DemoCraft).
    - Live non-blocking TCP socket probing measures exact network round-trip ping latencies (`● ONLINE (1ms)` / `○ OFFLINE`).
 7. **FastMCP 2024-11-05 Dual Server & Client**:
    - 100% JSON-RPC 2.0 stdio server (`codercraft-cli --mcp`) exposing tools for file I/O, regex grep, AST symbols, planning, patching, fleet probing, and swarm monitoring.
@@ -50,7 +50,7 @@
 | **Multi-Buffer Editor** | Read-only artifacts | Integrated file diffs | Integrated Monaco editor | **Native Multi-Buffer Editor with AST Symbol Jump Outline** |
 | **Fleet / Multi-Project Mission Control** | None | Single repo context | Cross-directory navigation | **Built-in Fleet Depot with live TCP socket probing for 12 Craft apps** |
 | **MCP Protocol Support** | Client only | Client & Server (TypeScript) | Client & Server (Python/Node) | **FastMCP 2024-11-05 JSON-RPC Server & Client in native Rust** |
-| **Data Sovereignty & Offline AI** | Cloud-only (Anthropic API) | Cloud + Ollama | Cloud-driven | **100% Sovereign Offline-First (`craft-ai-core` Ollama + Cloud optional)** |
+| **Your data & offline AI** | Lives on Anthropic's servers | Cloud + your machine | Cloud-driven | **Stays on your machine (`craft-ai-core` Ollama, cloud optional)** |
 | **Compiler & Lint Containment** | None | Shell command execution | Harness verification | **Self-healing stigmergic loop + Zero-Panic compiler denies** |
 
 ---

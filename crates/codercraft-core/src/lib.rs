@@ -16,7 +16,11 @@
 #![deny(clippy::unimplemented)]
 #![deny(clippy::todo)]
 
+pub mod autonomy;
 pub mod i18n;
+pub mod patch;
+pub mod permissions;
+pub mod sessions;
 
 use std::collections::HashMap;
 use std::net::{SocketAddr, TcpStream};
@@ -397,6 +401,57 @@ pub enum Command {
     StepSwarm,
     GetHelp,
     GetComparison,
+    ApplyPatch {
+        workspace_dir: String,
+        patch_text: String,
+    },
+    GlobSearch {
+        root: String,
+        pattern: String,
+    },
+    CheckPermission {
+        tool: String,
+        target: String,
+    },
+    SessionCreate {
+        session_id: Option<String>,
+        workspace_dir: String,
+        mode: String,
+        title: String,
+    },
+    SessionAppend {
+        session_id: String,
+        role: String,
+        content: String,
+        tool_calls_json: Option<String>,
+    },
+    SessionList {
+        workspace_filter: Option<String>,
+        since: Option<String>,
+        until: Option<String>,
+        limit: Option<usize>,
+    },
+    SessionSearch {
+        query: String,
+        top_k: Option<usize>,
+    },
+    SessionRecall {
+        year: i64,
+        month: u32,
+        limit: Option<usize>,
+    },
+    SessionRead {
+        session_id: String,
+        limit: Option<usize>,
+    },
+    AgentRun {
+        goal: String,
+        workspace_dir: String,
+        session_id: Option<String>,
+        max_steps: Option<usize>,
+        mode: Option<String>,
+        timeout_s: Option<u64>,
+    },
 }
 
 pub struct CoderCraftCore {
@@ -692,8 +747,12 @@ impl CoderCraftCore {
     }
 }
 
-pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
+pub async fn dispatch(cmd: Command, store: &DatabaseStore) -> Value {
     let mut core = CoderCraftCore::new();
+    // Eternal memory tables exist from here on; a corrupt sessions.db must
+    // never break the file tools, so schema errors are tolerated outside
+    // the session commands themselves.
+    let _ = sessions::ensure_schema(store);
 
     match cmd {
         Command::Status => {
@@ -712,7 +771,9 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
                     "OpenCodeBackbone", "ClaudeDesktopParity", "McpServerRegistry",
                     "IntegratedBashConsole", "AstTreeSitter", "StigmergicSwarm",
                     "QuadDisplayViewports", "FleetProjectDepot", "BezierNodeGraph",
-                    "MultiBufferEditor", "AstSymbolOutline"
+                    "MultiBufferEditor", "AstSymbolOutline", "AutonomousGoalLoop",
+                    "EternalSessionMemory", "PermissionGate", "MultiFilePatch",
+                    "GitignoreAwareGlob"
                 ],
                 "success": true
             })
@@ -735,15 +796,25 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
             }
         }
         Command::WriteFile { path, content } => {
-            match CoderCraftCore::write_file(&path, &content) {
-                Ok(()) => json!({ "success": true, "path": path, "status": "SAVED" }),
-                Err(e) => json!({ "success": false, "error": e }),
+            let v = permissions::check_tool("write", &path);
+            if v.decision == "deny" {
+                json!({ "success": false, "permission": v.decision, "reason": v.reason, "path": path })
+            } else {
+                match CoderCraftCore::write_file(&path, &content) {
+                    Ok(()) => json!({ "success": true, "path": path, "status": "SAVED", "permission": v.decision, "reason": v.reason }),
+                    Err(e) => json!({ "success": false, "error": e, "permission": v.decision }),
+                }
             }
         }
         Command::ApplyHunkEdit { path, target, replacement } => {
-            match CoderCraftCore::apply_hunk_edit(&path, &target, &replacement) {
-                Ok(()) => json!({ "success": true, "path": path, "status": "HUNK_APPLIED" }),
-                Err(e) => json!({ "success": false, "error": e }),
+            let v = permissions::check_tool("edit", &path);
+            if v.decision == "deny" {
+                json!({ "success": false, "permission": v.decision, "reason": v.reason, "path": path })
+            } else {
+                match CoderCraftCore::apply_hunk_edit(&path, &target, &replacement) {
+                    Ok(()) => json!({ "success": true, "path": path, "status": "HUNK_APPLIED", "permission": v.decision }),
+                    Err(e) => json!({ "success": false, "error": e, "permission": v.decision }),
+                }
             }
         }
         Command::GrepSearch { root, query } => {
@@ -844,13 +915,20 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
             })
         }
         Command::ExecuteConsoleCommand { command_line, working_dir } => {
-            let (code, stdout, stderr) = CoderCraftCore::execute_shell(&command_line, working_dir.as_deref());
-            json!({
-                "success": code == 0,
-                "exit_code": code,
-                "stdout": stdout,
-                "stderr": stderr
-            })
+            let v = permissions::check_tool("shell", &command_line);
+            if v.decision == "deny" {
+                json!({ "success": false, "permission": v.decision, "reason": v.reason })
+            } else {
+                let (code, stdout, stderr) = CoderCraftCore::execute_shell(&command_line, working_dir.as_deref());
+                json!({
+                    "success": code == 0,
+                    "exit_code": code,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "permission": v.decision,
+                    "permission_reason": v.reason
+                })
+            }
         }
         Command::ConfigureLlm { config } => {
             core.llm_config = config;
@@ -914,6 +992,77 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
                 "success": true,
                 "tasks": core.swarm_ledger.tasks
             })
+        }
+        Command::ApplyPatch { workspace_dir, patch_text } => {
+            let v = permissions::check_tool("patch", &workspace_dir);
+            if v.decision == "deny" {
+                json!({ "success": false, "permission": v.decision, "reason": v.reason })
+            } else {
+                match patch::apply_patch_text(&workspace_dir, &patch_text) {
+                    Ok(files) => json!({ "success": true, "workspace": workspace_dir, "applied": files, "permission": v.decision }),
+                    Err(e) => json!({ "success": false, "error": e, "permission": v.decision }),
+                }
+            }
+        }
+        Command::GlobSearch { root, pattern } => {
+            let _ = permissions::check_tool("glob", &root);
+            let files = patch::glob_files(&root, &pattern);
+            json!({ "success": true, "root": root, "pattern": pattern, "match_count": files.len(), "files": files })
+        }
+        Command::CheckPermission { tool, target } => {
+            let v = permissions::check_tool(&tool, &target);
+            json!({ "success": true, "tool": tool, "target": target, "decision": v.decision, "reason": v.reason })
+        }
+        Command::SessionCreate { session_id, workspace_dir, mode, title } => {
+            match sessions::create_session(store, session_id.as_deref().unwrap_or(""), &workspace_dir, &mode, &title) {
+                Ok(id) => json!({ "success": true, "session_id": id, "workspace": workspace_dir, "mode": mode, "title": title }),
+                Err(e) => json!({ "success": false, "error": e.to_string() }),
+            }
+        }
+        Command::SessionAppend { session_id, role, content, tool_calls_json } => {
+            match sessions::append_turn(store, &session_id, &role, &content, tool_calls_json.as_deref().unwrap_or("{}")) {
+                Ok(turn_id) => json!({ "success": true, "session_id": session_id, "turn_id": turn_id }),
+                Err(e) => json!({ "success": false, "error": e.to_string() }),
+            }
+        }
+        Command::SessionList { workspace_filter, since, until, limit } => {
+            match sessions::list_sessions(store, workspace_filter.as_deref(), since.as_deref(), until.as_deref(), limit.unwrap_or(50)) {
+                Ok(items) => json!({ "success": true, "count": items.len(), "sessions": items }),
+                Err(e) => json!({ "success": false, "error": e.to_string() }),
+            }
+        }
+        Command::SessionSearch { query, top_k } => {
+            match sessions::search(store, &query, top_k.unwrap_or(10)) {
+                Ok(hits) => json!({ "success": true, "query": query, "count": hits.len(), "hits": hits }),
+                Err(e) => json!({ "success": false, "error": e.to_string() }),
+            }
+        }
+        Command::SessionRecall { year, month, limit } => {
+            match sessions::recall_month(store, year, month, limit.unwrap_or(100)) {
+                Ok(turns) => json!({ "success": true, "year": year, "month": month, "count": turns.len(), "turns": turns }),
+                Err(e) => json!({ "success": false, "error": e.to_string() }),
+            }
+        }
+        Command::SessionRead { session_id, limit } => {
+            match sessions::read_session(store, &session_id, limit.unwrap_or(200)) {
+                Ok(turns) => json!({ "success": true, "session_id": session_id, "count": turns.len(), "turns": turns }),
+                Err(e) => json!({ "success": false, "error": e.to_string() }),
+            }
+        }
+        Command::AgentRun { goal, workspace_dir, session_id, max_steps, mode, timeout_s } => {
+            autonomy::run_goal(
+                store,
+                autonomy::RunRequest {
+                    workspace_dir,
+                    goal,
+                    session_id,
+                    max_steps,
+                    mode: mode.unwrap_or_else(|| "build".to_string()),
+                    timeout_s: timeout_s.unwrap_or_else(autonomy::default_timeout_s),
+                    brain: None,
+                },
+            )
+            .await
         }
         Command::GetHelp => {
             json!({

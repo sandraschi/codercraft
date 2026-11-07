@@ -68,6 +68,24 @@ pub struct CoderCraftApp {
     pub show_auth_modal: bool,
     pub show_about_dialog: bool,
     pub active_help_tab: usize,
+
+    // LLM Settings tab state (fleet CRAFT_LLM_PROVIDER_STANDARD contract).
+    // Secrets are write-only: key fields start empty every launch, only
+    // non-empty entries are persisted, presence is shown as set/unset dots.
+    pub llm_provider_pick: String,
+    pub llm_endpoint_edit: String,
+    pub llm_model_edit: String,
+    pub llm_models_cache: Vec<String>,
+    pub llm_key_openai: String,
+    pub llm_key_anthropic: String,
+    pub llm_key_deepseek: String,
+    pub llm_key_meta: String,
+    pub llm_key_openrouter: String,
+    pub llm_key_custom: String,
+    pub llm_status_line: String,
+    pub llm_vram_line: String,
+    pub llm_job_running: bool,
+    pub llm_result_rx: Option<std::sync::mpsc::Receiver<String>>,
 }
 
 impl CoderCraftApp {
@@ -124,9 +142,73 @@ impl CoderCraftApp {
             show_auth_modal: false,
             show_about_dialog: false,
             active_help_tab: 0,
+
+            llm_provider_pick: {
+                codercraft_core::craft_ai_core::CraftAiConfig::load().provider
+            },
+            llm_endpoint_edit: String::new(),
+            llm_model_edit: {
+                codercraft_core::craft_ai_core::CraftAiConfig::load().model
+            },
+            llm_models_cache: vec![],
+            llm_key_openai: String::new(),
+            llm_key_anthropic: String::new(),
+            llm_key_deepseek: String::new(),
+            llm_key_meta: String::new(),
+            llm_key_openrouter: String::new(),
+            llm_key_custom: String::new(),
+            llm_status_line: String::new(),
+            llm_vram_line: String::new(),
+            llm_job_running: false,
+            llm_result_rx: None,
         })
     }
 
+    /// Run a blocking LLM job off the UI thread; the result lands in
+    /// `llm_status_line` (and the model cache) on the next frame.
+    /// Only one job at a time: extra clicks while busy are ignored.
+    pub fn llm_spawn(&mut self, label: &str, job: impl FnOnce() -> String + Send + 'static) {
+        if self.llm_job_running {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.llm_result_rx = Some(rx);
+        self.llm_job_running = true;
+        self.llm_status_line = format!("{label} ...");
+        std::thread::spawn(move || {
+            let out = job();
+            let _ = tx.send(out);
+        });
+    }
+
+    /// Poll the worker result (non-blocking). Handles MODEL_CACHE/VRAMLINE prefixes.
+    pub fn llm_poll(&mut self) {
+        if !self.llm_job_running {
+            return;
+        }
+        let done: Option<String> = self
+            .llm_result_rx
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok());
+        if let Some(msg) = done {
+            if let Some(rest) = msg.strip_prefix("MODEL_CACHE:") {
+                match serde_json::from_str::<Vec<String>>(rest) {
+                    Ok(models) => {
+                        self.llm_status_line = format!("{} models listed", models.len());
+                        self.llm_models_cache = models;
+                    }
+                    Err(_) => self.llm_status_line = msg,
+                }
+            } else if let Some(rest) = msg.strip_prefix("VRAMLINE:") {
+                self.llm_vram_line = rest.to_string();
+                self.llm_status_line = "telemetry refreshed".to_string();
+            } else {
+                self.llm_status_line = msg;
+            }
+            self.llm_job_running = false;
+            self.llm_result_rx = None;
+        }
+    }
     pub fn apply_bespoke_visuals(&self, ctx: &egui::Context) {
         let mut visuals = if self.is_dark_theme {
             egui::Visuals::dark()
@@ -846,26 +928,337 @@ impl CoderCraftApp {
                         }
                     }
                     ActiveRightTab::LlmSettings => {
-                        ui.heading("🧠 LLM Setup & Tokens");
-                        ui.label(format!("Provider: {}", self.core.llm_config.provider));
-                        ui.label(format!("Endpoint: {}", self.core.llm_config.endpoint));
-                        ui.label(format!("Model: {}", self.core.llm_config.model_name));
+                        use codercraft_core::craft_ai_core as ai;
+                        // Worker results land here (non-blocking).
+                        self.llm_poll();
+                        ui.heading("LLM Setup & Tokens");
+                        // Live file truth: reflects CLI/MCP changes too.
+                        let file_cfg = ai::CraftAiConfig::load();
+                        let file_kind =
+                            ai::providers::resolve_provider(&file_cfg.provider);
+                        ui.label(format!(
+                            "Active: {} / {}",
+                            file_cfg.provider, file_cfg.model
+                        ));
+                        if file_kind.is_none() {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(255, 120, 120),
+                                "Unknown provider in config file - pick one below.",
+                            );
+                        }
                         ui.separator();
-                        ui.label("Quick Switch:");
-                        if ui.button("Local: Ollama qwen2.5-coder:32b").clicked() {
-                            self.core.llm_config.provider = "Ollama".to_string();
-                            self.core.llm_config.endpoint = "http://localhost:11434/api/chat".to_string();
-                            self.core.llm_config.model_name = "qwen2.5-coder:32b".to_string();
+
+                        // Provider dropdown: all 8 fleet providers, never auto-pick.
+                        ui.horizontal(|ui| {
+                            ui.label("Provider:");
+                            egui::ComboBox::from_id_salt("llm_provider")
+                                .selected_text(
+                                    ai::providers::resolve_provider(&self.llm_provider_pick)
+                                        .map(ai::providers::provider_label)
+                                        .unwrap_or("(pick one)"),
+                                )
+                                .show_ui(ui, |ui| {
+                                    for id in ai::providers::PROVIDER_IDS {
+                                        let kind = ai::providers::resolve_provider(id);
+                                        let label = kind
+                                            .map(ai::providers::provider_label)
+                                            .unwrap_or(*id);
+                                        ui.selectable_value(
+                                            &mut self.llm_provider_pick,
+                                            (*id).to_string(),
+                                            label,
+                                        );
+                                    }
+                                });
+                        });
+                        // Endpoint: default per provider, editable override.
+                        let picked_kind =
+                            ai::providers::resolve_provider(&self.llm_provider_pick);
+                        let default_ep = picked_kind
+                            .map(|k| ai::providers::default_endpoint(&file_cfg, k))
+                            .unwrap_or_default();
+                        ui.horizontal(|ui| {
+                            ui.label("Endpoint override:");
+                            ui.text_edit_singleline(&mut self.llm_endpoint_edit)
+                                .on_hover_text(format!(
+                                    "Empty = default ({})",
+                                    if default_ep.is_empty() {
+                                        "(none)"
+                                    } else {
+                                        &default_ep
+                                    }
+                                ));
+                        });
+                        let effective_ep = if self.llm_endpoint_edit.trim().is_empty() {
+                            default_ep.clone()
+                        } else {
+                            self.llm_endpoint_edit.trim().to_string()
+                        };
+                        ui.label(format!("Effective endpoint: {effective_ep}"));
+                        // Model: free text + live list, never auto-picks [0].
+                        ui.horizontal(|ui| {
+                            ui.label("Model:");
+                            ui.text_edit_singleline(&mut self.llm_model_edit);
+                            if ui.button("Refresh list").clicked() {
+                                let provider = self.llm_provider_pick.clone();
+                                let endpoint = effective_ep.clone();
+                                self.llm_spawn("listing models", move || {
+                                    let mut cfg =
+                                        ai::CraftAiConfig::load();
+                                    cfg.provider = provider.clone();
+                                    if !endpoint.trim().is_empty() {
+                                        cfg.endpoint_override = endpoint.clone();
+                                    }
+                                    let kind = ai::providers::resolve_provider(&provider);
+                                    match kind {
+                                        None => format!(
+                                            "unknown provider '{provider}'"
+                                        ),
+                                        Some(k) => {
+                                            match ai::providers::list_models(&cfg, k) {
+                                                Ok(models) => format!(
+                                                    "MODEL_CACHE:{}",
+                                                    serde_json::to_string(&models)
+                                                        .unwrap_or_else(|_| "[]".to_string())
+                                                ),
+                                                Err(e) => e.to_string(),
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                        if !self.llm_models_cache.is_empty() {
+                            ui.label(format!(
+                                "Available ({} - click to pick):",
+                                self.llm_models_cache.len()
+                            ));
+                            egui::ScrollArea::vertical()
+                                .max_height(120.0)
+                                .show(ui, |ui| {
+                                    for m in self.llm_models_cache.clone() {
+                                        if ui.selectable_label(false, &m).clicked() {
+                                            self.llm_model_edit = m;
+                                        }
+                                    }
+                                });
                         }
-                        if ui.button("Cloud: Claude 3.5 Sonnet").clicked() {
-                            self.core.llm_config.provider = "Anthropic".to_string();
-                            self.core.llm_config.endpoint = "https://api.anthropic.com/v1/messages".to_string();
-                            self.core.llm_config.model_name = "claude-3-5-sonnet".to_string();
+                        ui.separator();
+                        // API keys: write-only password fields. Non-empty entries
+                        // are saved; presence is shown as set/unset dots only.
+                        ui.label("API keys (leave empty to keep stored value):");
+                        let dots = |present: bool| {
+                            if present {
+                                "set"
+                            } else {
+                                "not set"
+                            }
+                        };
+                        let presents = |slot: &str| -> bool {
+                            match slot {
+                                "openai" => !file_cfg.openai_api_key.trim().is_empty(),
+                                "anthropic" => {
+                                    !file_cfg.anthropic_api_key.trim().is_empty()
+                                }
+                                "deepseek" => {
+                                    !file_cfg.deepseek_api_key.trim().is_empty()
+                                }
+                                "meta" => !file_cfg.meta_api_key.trim().is_empty(),
+                                "openrouter" => {
+                                    !file_cfg.openrouter_api_key.trim().is_empty()
+                                }
+                                _ => !file_cfg.custom_api_key.trim().is_empty(),
+                            }
+                        };
+                        for (slot, field) in [
+                            ("openai", &mut self.llm_key_openai),
+                            ("anthropic", &mut self.llm_key_anthropic),
+                            ("deepseek", &mut self.llm_key_deepseek),
+                            ("meta", &mut self.llm_key_meta),
+                            ("openrouter", &mut self.llm_key_openrouter),
+                            ("custom", &mut self.llm_key_custom),
+                        ] {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{slot} [{}]:", dots(presents(slot))));
+                                ui.add(
+                                    egui::TextEdit::singleline(field).password(true),
+                                );
+                            });
                         }
-                        if ui.button("Cloud: DeepSeek Coder V3").clicked() {
-                            self.core.llm_config.provider = "DeepSeek".to_string();
-                            self.core.llm_config.endpoint = "https://api.deepseek.com/chat/completions".to_string();
-                            self.core.llm_config.model_name = "deepseek-coder".to_string();
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button("Save selection")
+                                .on_hover_text(
+                                    "Persists provider/model/endpoint/keys, then switches VRAM (Ollama evicts others and warms the pick).",
+                                )
+                                .clicked()
+                            {
+                                let provider = self.llm_provider_pick.clone();
+                                let model = self.llm_model_edit.clone();
+                                let endpoint = self.llm_endpoint_edit.clone();
+                                let keys = [
+                                    self.llm_key_openai.clone(),
+                                    self.llm_key_anthropic.clone(),
+                                    self.llm_key_deepseek.clone(),
+                                    self.llm_key_meta.clone(),
+                                    self.llm_key_openrouter.clone(),
+                                    self.llm_key_custom.clone(),
+                                ];
+                                self.llm_spawn("saving", move || {
+                                    use codercraft_core::craft_ai_core as ai2;
+                                    let mut cfg = ai2::CraftAiConfig::load();
+                                    if ai2::providers::resolve_provider(&provider).is_none() {
+                                        return format!("unknown provider '{provider}'");
+                                    }
+                                    if model.trim().is_empty() {
+                                        return "empty model: nothing selected, nothing saved".to_string();
+                                    }
+                                    cfg.provider = provider.clone();
+                                    cfg.model = model.clone();
+                                    cfg.endpoint_override = endpoint.trim().to_string();
+                                    let slots = [
+                                        ("openai", &keys[0]),
+                                        ("anthropic", &keys[1]),
+                                        ("deepseek", &keys[2]),
+                                        ("meta", &keys[3]),
+                                        ("openrouter", &keys[4]),
+                                        ("custom", &keys[5]),
+                                    ];
+                                    for (slot, value) in slots {
+                                        if value.trim().is_empty() {
+                                            continue;
+                                        }
+                                        let kind = ai2::providers::resolve_provider(slot);
+                                        match kind {
+                                            Some(k) => {
+                                                let dest = match k {
+                                                    ai2::ProviderKind::OpenAi => &mut cfg.openai_api_key,
+                                                    ai2::ProviderKind::Anthropic => &mut cfg.anthropic_api_key,
+                                                    ai2::ProviderKind::DeepSeek => &mut cfg.deepseek_api_key,
+                                                    ai2::ProviderKind::Meta => &mut cfg.meta_api_key,
+                                                    ai2::ProviderKind::OpenRouter => &mut cfg.openrouter_api_key,
+                                                    ai2::ProviderKind::Custom => &mut cfg.custom_api_key,
+                                                    ai2::ProviderKind::Ollama | ai2::ProviderKind::LMStudio => continue,
+                                                };
+                                                *dest = value.trim().to_string();
+                                            }
+                                            None => continue,
+                                        }
+                                    }
+                                    if let Err(e) = cfg.save() {
+                                        return format!("save failed: {e}");
+                                    }
+                                    let kind = ai2::providers::resolve_provider(&provider);
+                                    if kind == Some(ai2::ProviderKind::Ollama) {
+                                        let rep = ai2::providers::switch_ollama_model(
+                                            &cfg, &model,
+                                        );
+                                        format!(
+                                            "saved {provider}/{model}; evicted {} / warmed={}",
+                                            rep.evicted.join(", "),
+                                            rep.warmed
+                                        )
+                                    } else {
+                                        format!("saved {provider}/{model}")
+                                    }
+                                });
+                                // Secrets leave memory immediately after dispatch.
+                                self.llm_key_openai.clear();
+                                self.llm_key_anthropic.clear();
+                                self.llm_key_deepseek.clear();
+                                self.llm_key_meta.clear();
+                                self.llm_key_openrouter.clear();
+                                self.llm_key_custom.clear();
+                            }
+                            if ui.button("Test brain").clicked() {
+                                self.llm_spawn("probing brain", move || {
+                                    use codercraft_core::craft_ai_core as ai3;
+                                    let cfg = ai3::CraftAiConfig::load();
+                                    let client = ai3::CraftAiClient::with_config(cfg);
+                                    let rt = tokio::runtime::Builder::new_current_thread()
+                                        .enable_all()
+                                        .build();
+                                    match rt {
+                                        Ok(rt) => {
+                                            let reply = rt.block_on(async {
+                                                tokio::time::timeout(
+                                                    std::time::Duration::from_secs(60),
+                                                    client.complete(
+                                                        "You are a connectivity probe. Reply briefly.",
+                                                        "Reply with exactly: OK",
+                                                    ),
+                                                )
+                                                .await
+                                            });
+                                            match reply {
+                                                Ok(Ok(text)) => {
+                                                    let short: String =
+                                                        text.chars().take(200).collect();
+                                                    format!("ok: {short}")
+                                                }
+                                                Ok(Err(e)) => format!("probe error: {e}"),
+                                                Err(_) => {
+                                                    "probe timed out after 60s".to_string()
+                                                }
+                                            }
+                                        }
+                                        Err(e) => format!("probe error: {e}"),
+                                    }
+                                });
+                            }
+                            if ui.button("Refresh telemetry").clicked() {
+                                self.llm_spawn("reading telemetry", move || {
+                                    use codercraft_core::craft_ai_core as ai4;
+                                    let cfg = ai4::CraftAiConfig::load();
+                                    let residents =
+                                        ai4::providers::ollama_residents(&cfg);
+                                    let vram = ai4::providers::gpu_vram();
+                                    let vram_txt = match vram {
+                                        Some((used, total)) => format!(
+                                            "VRAM {used}/{total} MiB"
+                                        ),
+                                        None => "VRAM n/a (no nvidia-smi)".to_string(),
+                                    };
+                                    let res_txt = if residents.is_empty() {
+                                        "no Ollama residents".to_string()
+                                    } else {
+                                        residents
+                                            .iter()
+                                            .map(|r| {
+                                                format!("{} ({} MB)", r.name, r.size_vram_mb)
+                                            })
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    };
+                                    format!("VRAMLINE:{vram_txt}; residents: {res_txt}")
+                                });
+                            }
+                            if ui.button("Evict all models").clicked() {
+                                self.llm_spawn("evicting", move || {
+                                    use codercraft_core::craft_ai_core as ai5;
+                                    let cfg = ai5::CraftAiConfig::load();
+                                    let rep =
+                                        ai5::providers::switch_ollama_model(&cfg, "");
+                                    format!(
+                                        "evicted: {}",
+                                        if rep.evicted.is_empty() {
+                                            "(none loaded)".to_string()
+                                        } else {
+                                            rep.evicted.join(", ")
+                                        }
+                                    )
+                                });
+                            }
+                        });
+                        if !self.llm_vram_line.is_empty() {
+                            ui.label(format!("Telemetry: {}", self.llm_vram_line));
+                        }
+                        if self.llm_job_running {
+                            ui.spinner();
+                        }
+                        if !self.llm_status_line.is_empty() {
+                            ui.label(format!("Status: {}", self.llm_status_line));
                         }
                     }
                 }

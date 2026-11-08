@@ -94,6 +94,116 @@ enum Commands {
     HelpOverview,
     /// Compare CoderCraft with Claude Desktop, OpenCode, and AGY
     Compare,
+    /// Apply multi-file patch (OpenCode apply_patch markers)
+    ApplyPatch {
+        #[arg(default_value = ".")]
+        workspace: String,
+        #[arg(long)]
+        patch_file: Option<String>,
+    },
+    /// Gitignore-aware file glob
+    Glob {
+        pattern: String,
+        #[arg(default_value = ".")]
+        workspace: String,
+    },
+    /// Check permission verdict for a tool call
+    CheckPerm {
+        tool: String,
+        target: String,
+    },
+    /// Create eternal-memory session
+    SessionNew {
+        workspace: String,
+        #[arg(default_value = "build")]
+        mode: String,
+        #[arg(default_value = "codercraft session")]
+        title: String,
+        #[arg(long)]
+        id: Option<String>,
+    },
+    /// Append a turn to a session
+    SessionAppend {
+        session: String,
+        role: String,
+        content: String,
+    },
+    /// List sessions (eternal memory)
+    SessionList {
+        #[arg(long)]
+        workspace: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long)]
+        until: Option<String>,
+    },
+    /// Full-text search across all session turns
+    SessionSearch {
+        query: String,
+    },
+    /// Recall what was discussed in a calendar month (e.g. last September)
+    SessionRecall {
+        year: i64,
+        month: u32,
+    },
+    /// Read one session transcript
+    SessionRead {
+        session: String,
+    },
+    /// Run autonomous goal loop (plan -> act -> verify, logged to eternal memory)
+    Run {
+        goal: String,
+        #[arg(default_value = ".")]
+        workspace: String,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, default_value_t = 0)]
+        steps: usize,
+        #[arg(long, default_value = "build")]
+        mode: String,
+        #[arg(long, default_value_t = 0)]
+        timeout: u64,
+    },
+    /// LLM provider management: status, list, use, set-key, evict, test.
+    /// Keys passed on the command line land in shell history: prefer the
+    /// Settings tab or MCP for secrets.
+    Llm {
+        #[arg(default_value = "status")]
+        action: String,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        key: Option<String>,
+    },
+}
+
+fn open_eternal_store() -> DatabaseStore {
+    let db_path = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map(|h| {
+            std::path::PathBuf::from(h)
+                .join(".craft")
+                .join("codercraft_sessions.db")
+        });
+    if let Ok(path) = db_path {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(store) = DatabaseStore::open(&path) {
+            eprintln!(
+                "[codercraft-mcp] eternal session memory: {}",
+                path.to_string_lossy()
+            );
+            return store;
+        }
+        eprintln!("[codercraft-mcp] disk store unavailable, falling back to memory");
+    }
+    DatabaseStore::open_in_memory().unwrap_or_else(|e| {
+        eprintln!("Failed to open in-memory store: {e}");
+        std::process::exit(1);
+    })
 }
 
 fn main() {
@@ -103,10 +213,7 @@ fn main() {
         std::process::exit(1);
     });
 
-    let store = DatabaseStore::open_in_memory().unwrap_or_else(|e| {
-        eprintln!("Failed to open in-memory store: {e}");
-        std::process::exit(1);
-    });
+    let store = open_eternal_store();
 
     if cli.mcp {
         run_mcp_stdio(&rt, &store);
@@ -178,13 +285,105 @@ fn main() {
             let res = rt.block_on(dispatch(Command::GetComparison, &store));
             println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
         }
+        Some(Commands::ApplyPatch { workspace, patch_file }) => {
+            let patch_text = match patch_file {
+                Some(f) => std::fs::read_to_string(&f).unwrap_or_else(|e| {
+                    eprintln!("Cannot read patch file {f}: {e}");
+                    std::process::exit(1);
+                }),
+                None => {
+                    use std::io::Read as _;
+                    let mut buf = String::new();
+                    std::io::stdin().read_to_string(&mut buf).unwrap_or(0);
+                    buf
+                }
+            };
+            let res = rt.block_on(dispatch(Command::ApplyPatch { workspace_dir: workspace, patch_text }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::Glob { pattern, workspace }) => {
+            let res = rt.block_on(dispatch(Command::GlobSearch { root: workspace, pattern }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::CheckPerm { tool, target }) => {
+            let res = rt.block_on(dispatch(Command::CheckPermission { tool, target }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::SessionNew { workspace, mode, title, id }) => {
+            let res = rt.block_on(dispatch(Command::SessionCreate { session_id: id, workspace_dir: workspace, mode, title }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::SessionAppend { session, role, content }) => {
+            let res = rt.block_on(dispatch(Command::SessionAppend { session_id: session, role, content, tool_calls_json: None }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::SessionList { workspace, since, until }) => {
+            let res = rt.block_on(dispatch(Command::SessionList { workspace_filter: workspace, since, until, limit: Some(100) }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::SessionSearch { query }) => {
+            let res = rt.block_on(dispatch(Command::SessionSearch { query, top_k: Some(20) }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::SessionRecall { year, month }) => {
+            let res = rt.block_on(dispatch(Command::SessionRecall { year, month, limit: Some(100) }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::SessionRead { session }) => {
+            let res = rt.block_on(dispatch(Command::SessionRead { session_id: session, limit: Some(200) }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::Run { goal, workspace, session, steps, mode, timeout }) => {
+            let res = rt.block_on(dispatch(Command::AgentRun {
+                goal,
+                workspace_dir: workspace,
+                session_id: session,
+                max_steps: if steps == 0 { None } else { Some(steps) },
+                mode: Some(mode),
+                timeout_s: if timeout == 0 { None } else { Some(timeout) },
+            }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::Llm { action, provider, model, key }) => {
+            let res = match action.as_str() {
+                "status" => rt.block_on(dispatch(Command::LlmStatus, &store)),
+                "list" => rt.block_on(dispatch(Command::LlmListModels { provider }, &store)),
+                "use" => {
+                    let p = provider.unwrap_or_default();
+                    let m = model.unwrap_or_default();
+                    rt.block_on(dispatch(Command::LlmSelect { provider: p, model: m }, &store))
+                }
+                "set-key" => {
+                    let p = provider.unwrap_or_default();
+                    let k = key.unwrap_or_default();
+                    rt.block_on(dispatch(Command::LlmSetKey { provider: p, api_key: k }, &store))
+                }
+                "evict" => {
+                    rt.block_on(dispatch(Command::LlmEvict { keep: model }, &store))
+                }
+                "test" => {
+                    rt.block_on(dispatch(Command::LlmTest { prompt: model }, &store))
+                }
+                other => serde_json::json!({
+                    "success": false,
+                    "error": format!("unknown llm action '{other}' (status|list|use|set-key|evict|test)")
+                }),
+            };
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
         None => {
             let help_res = rt.block_on(dispatch(Command::GetHelp, &store));
             println!("CoderCraft Local-First Agentic IDE & Studio v{APP_VERSION} (Port {CONTROL_PORT})");
             println!("{}", serde_json::to_string_pretty(&help_res).unwrap_or_default());
-            println!("\nUse 'codercraft-cli compare' for Claude/OpenCode/AGY matrix, or --mcp for FastMCP server.");
+            println!("\nUse 'codercraft-cli compare for Claude/OpenCode/AGY matrix, or --mcp for FastMCP server.");
         }
     }
+    // One-shot CLI: exit immediately. Dropping the Tokio runtime would block
+    // until abandoned blocking-pool threads (e.g. a curl still waiting on a
+    // slow model after a brain timeout) drain. The DB writes above are all
+    // synchronous, so nothing is lost by skipping destructors here.
+    // The MCP stdio loop above never reaches this line while serving.
+    std::process::exit(0);
 }
 
 fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
@@ -401,6 +600,173 @@ fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
                             "name": "codercraft_compare",
                             "description": "Detailed architectural comparison matrix: CoderCraft vs Claude Desktop vs OpenCode vs AGY.",
                             "inputSchema": { "type": "object", "properties": {} }
+                        },
+                        {
+                            "name": "codercraft_apply_patch",
+                            "description": "Apply multi-file patch with OpenCode markers (*** Add File / *** Update File / *** Delete File / *** Move to).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "workspace_dir": { "type": "string" },
+                                    "patch_text": { "type": "string" }
+                                },
+                                "required": ["workspace_dir", "patch_text"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_glob",
+                            "description": "Gitignore-aware file glob (supports **, *, ?).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "root": { "type": "string" },
+                                    "pattern": { "type": "string" }
+                                },
+                                "required": ["root", "pattern"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_check_permission",
+                            "description": "Check allow/ask/deny verdict for a mutating tool call before running it.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "tool": { "type": "string" },
+                                    "target": { "type": "string" }
+                                },
+                                "required": ["tool", "target"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_session_create",
+                            "description": "Create an eternal-memory chat session.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "workspace_dir": { "type": "string" },
+                                    "mode": { "type": "string" },
+                                    "title": { "type": "string" },
+                                    "session_id": { "type": "string" }
+                                },
+                                "required": ["workspace_dir"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_session_append",
+                            "description": "Append a turn (user/assistant) to an eternal-memory session.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "session_id": { "type": "string" },
+                                    "role": { "type": "string" },
+                                    "content": { "type": "string" }
+                                },
+                                "required": ["session_id", "role", "content"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_session_list",
+                            "description": "List eternal-memory sessions with optional workspace/date filters.",
+                            "inputSchema": { "type": "object", "properties": {} }
+                        },
+                        {
+                            "name": "codercraft_session_search",
+                            "description": "Full-text search across every session turn (eternal memory elicitation).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": { "query": { "type": "string" } },
+                                "required": ["query"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_session_recall",
+                            "description": "Recall what was discussed in a calendar month (year + 1-12 month).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "year": { "type": "integer" },
+                                    "month": { "type": "integer" }
+                                },
+                                "required": ["year", "month"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_session_read",
+                            "description": "Read one session transcript.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": { "session_id": { "type": "string" } },
+                                "required": ["session_id"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_run",
+                            "description": "Run autonomous goal loop (explore -> act -> verify), every step logged to eternal memory. Returns session_id plus step ledger.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "goal": { "type": "string" },
+                                    "workspace_dir": { "type": "string" },
+                                    "session_id": { "type": "string" },
+                                    "max_steps": { "type": "integer" },
+                                    "mode": { "type": "string" },
+                                    "timeout_s": { "type": "integer" }
+                                },
+                                "required": ["goal", "workspace_dir"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_llm_status",
+                            "description": "LLM provider status: file config (keys redacted) plus reachability probe of the configured provider.",
+                            "inputSchema": { "type": "object", "properties": {} }
+                        },
+                        {
+                            "name": "codercraft_llm_list_models",
+                            "description": "List models for a provider (live list; curated only for Anthropic with a key).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": { "provider": { "type": "string" } }
+                            }
+                        },
+                        {
+                            "name": "codercraft_llm_select",
+                            "description": "Select provider + model, persist it, and switch VRAM (Ollama evicts others and warms the pick).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "provider": { "type": "string" },
+                                    "model": { "type": "string" }
+                                },
+                                "required": ["provider", "model"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_llm_set_key",
+                            "description": "Store a cloud provider API key in ~/.craft/ai_config.json. Never echoed back.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "provider": { "type": "string" },
+                                    "api_key": { "type": "string" }
+                                },
+                                "required": ["provider", "api_key"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_llm_evict",
+                            "description": "Evict Ollama residents; keep one warm when given.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": { "keep": { "type": "string" } }
+                            }
+                        },
+                        {
+                            "name": "codercraft_llm_test",
+                            "description": "Probe the configured brain with a short completion (90s cap).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": { "prompt": { "type": "string" } }
+                            }
                         }
                     ]
                 }
@@ -478,6 +844,87 @@ fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
                     "codercraft_swarm_status" => rt.block_on(dispatch(Command::GetSwarmState, store)),
                     "codercraft_help" => rt.block_on(dispatch(Command::GetHelp, store)),
                     "codercraft_compare" => rt.block_on(dispatch(Command::GetComparison, store)),
+                    "codercraft_apply_patch" => {
+                        let dir = args.get("workspace_dir").and_then(|d| d.as_str()).unwrap_or(".");
+                        let patch = args.get("patch_text").and_then(|p| p.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(Command::ApplyPatch { workspace_dir: dir.to_string(), patch_text: patch.to_string() }, store))
+                    }
+                    "codercraft_glob" => {
+                        let root = args.get("root").and_then(|r| r.as_str()).unwrap_or(".");
+                        let pattern = args.get("pattern").and_then(|p| p.as_str()).unwrap_or("**/*.rs");
+                        rt.block_on(dispatch(Command::GlobSearch { root: root.to_string(), pattern: pattern.to_string() }, store))
+                    }
+                    "codercraft_check_permission" => {
+                        let tool = args.get("tool").and_then(|t| t.as_str()).unwrap_or("");
+                        let target = args.get("target").and_then(|t| t.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(Command::CheckPermission { tool: tool.to_string(), target: target.to_string() }, store))
+                    }
+                    "codercraft_session_create" => {
+                        let dir = args.get("workspace_dir").and_then(|d| d.as_str()).unwrap_or(".");
+                        let mode = args.get("mode").and_then(|m| m.as_str()).unwrap_or("build");
+                        let title = args.get("title").and_then(|t| t.as_str()).unwrap_or("codercraft session");
+                        let sid = args.get("session_id").and_then(|s| s.as_str()).map(|s| s.to_string());
+                        rt.block_on(dispatch(Command::SessionCreate { session_id: sid, workspace_dir: dir.to_string(), mode: mode.to_string(), title: title.to_string() }, store))
+                    }
+                    "codercraft_session_append" => {
+                        let sid = args.get("session_id").and_then(|s| s.as_str()).unwrap_or("");
+                        let role = args.get("role").and_then(|r| r.as_str()).unwrap_or("user");
+                        let content = args.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(Command::SessionAppend { session_id: sid.to_string(), role: role.to_string(), content: content.to_string(), tool_calls_json: None }, store))
+                    }
+                    "codercraft_session_list" => {
+                        let ws = args.get("workspace_filter").and_then(|w| w.as_str()).map(|w| w.to_string());
+                        let since = args.get("since").and_then(|s| s.as_str()).map(|s| s.to_string());
+                        let until = args.get("until").and_then(|s| s.as_str()).map(|s| s.to_string());
+                        rt.block_on(dispatch(Command::SessionList { workspace_filter: ws, since, until, limit: Some(100) }, store))
+                    }
+                    "codercraft_session_search" => {
+                        let q = args.get("query").and_then(|x| x.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(Command::SessionSearch { query: q.to_string(), top_k: Some(20) }, store))
+                    }
+                    "codercraft_session_recall" => {
+                        let year = args.get("year").and_then(|y| y.as_i64()).unwrap_or(2026);
+                        let month = args.get("month").and_then(|m| m.as_u64()).unwrap_or(1) as u32;
+                        rt.block_on(dispatch(Command::SessionRecall { year, month, limit: Some(100) }, store))
+                    }
+                    "codercraft_session_read" => {
+                        let sid = args.get("session_id").and_then(|s| s.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(Command::SessionRead { session_id: sid.to_string(), limit: Some(200) }, store))
+                    }
+                    "codercraft_run" => {
+                        let goal = args.get("goal").and_then(|g| g.as_str()).unwrap_or("");
+                        let dir = args.get("workspace_dir").and_then(|d| d.as_str()).unwrap_or(".");
+                        let sid = args.get("session_id").and_then(|s| s.as_str()).map(|s| s.to_string());
+                        let steps = args.get("max_steps").and_then(|n| n.as_u64()).map(|n| n as usize);
+                        let mode = args.get("mode").and_then(|m| m.as_str()).map(|m| m.to_string());
+                        let timeout = args.get("timeout_s").and_then(|n| n.as_u64());
+                        rt.block_on(dispatch(Command::AgentRun { goal: goal.to_string(), workspace_dir: dir.to_string(), session_id: sid, max_steps: steps, mode, timeout_s: timeout }, store))
+                    }
+                    "codercraft_llm_status" => {
+                        rt.block_on(dispatch(Command::LlmStatus, store))
+                    }
+                    "codercraft_llm_list_models" => {
+                        let provider = args.get("provider").and_then(|p| p.as_str()).map(|p| p.to_string());
+                        rt.block_on(dispatch(Command::LlmListModels { provider }, store))
+                    }
+                    "codercraft_llm_select" => {
+                        let provider = args.get("provider").and_then(|p| p.as_str()).unwrap_or("");
+                        let model = args.get("model").and_then(|m| m.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(Command::LlmSelect { provider: provider.to_string(), model: model.to_string() }, store))
+                    }
+                    "codercraft_llm_set_key" => {
+                        let provider = args.get("provider").and_then(|p| p.as_str()).unwrap_or("");
+                        let key = args.get("api_key").and_then(|k| k.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(Command::LlmSetKey { provider: provider.to_string(), api_key: key.to_string() }, store))
+                    }
+                    "codercraft_llm_evict" => {
+                        let keep = args.get("keep").and_then(|k| k.as_str()).map(|k| k.to_string());
+                        rt.block_on(dispatch(Command::LlmEvict { keep }, store))
+                    }
+                    "codercraft_llm_test" => {
+                        let prompt = args.get("prompt").and_then(|p| p.as_str()).map(|p| p.to_string());
+                        rt.block_on(dispatch(Command::LlmTest { prompt }, store))
+                    }
                     _ => json!({ "error": format!("Unknown tool: {name}") }),
                 };
 

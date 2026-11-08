@@ -1,0 +1,7 @@
+== codercraft 0.1.0 ==
+building...
+second exe: D:\Dev\repos\codercraft\target\release\codercraft-cli.exe
+wrote D:\Dev\repos\codercraft\dist\codercraft-0.1.0-windows-x64-portable.zip
+sha256 5b13b1c1d6b0840d1ef824359a028e9598c7d0e6ab522316a422e65d844b8e76
+dry-run: publish with -Publish, or manually:
+gh release create v0.1.0 dist/codercraft-0.1.0-windows-x64-portable.zip dist/SHA256SUMS.txt --repo sandraschi/codercraft --title "codercraft 0.1.0 (alpha)" --prerelease

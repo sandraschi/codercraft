@@ -738,6 +738,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "codercraft-agent",
+ "craft-ai-core",
  "databasecraft-core",
  "databasecraft-store",
  "serde",

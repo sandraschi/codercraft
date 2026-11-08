@@ -229,9 +229,13 @@ pub fn t(key: I18nKey, locale: AppLocale) -> &'static str {
         (I18nKey::FleetDepotScreen, AppLocale::Zh) => "舰队项目工程总览 (副屏 4)",
 
         (I18nKey::SwarmSupervisor, AppLocale::En) => "Stigmergic Swarm Supervisor (Display 3)",
-        (I18nKey::SwarmSupervisor, AppLocale::De) => "Stigmergischer Schwarm-Supervisor (Display 3)",
+        (I18nKey::SwarmSupervisor, AppLocale::De) => {
+            "Stigmergischer Schwarm-Supervisor (Display 3)"
+        }
         (I18nKey::SwarmSupervisor, AppLocale::Fr) => "Superviseur d'essaim stigmergique (Écran 3)",
-        (I18nKey::SwarmSupervisor, AppLocale::Es) => "Supervisor de enjambre estigmérgico (Pantalla 3)",
+        (I18nKey::SwarmSupervisor, AppLocale::Es) => {
+            "Supervisor de enjambre estigmérgico (Pantalla 3)"
+        }
         (I18nKey::SwarmSupervisor, AppLocale::Ja) => "スティグマジー群監督 (画面 3)",
         (I18nKey::SwarmSupervisor, AppLocale::Ko) => "스티그머지 에이전트 군집 감독 (화면 3)",
         (I18nKey::SwarmSupervisor, AppLocale::Zh) => "蚁群协同调度监视器 (副屏 3)",

@@ -16,16 +16,26 @@
 #![deny(clippy::unimplemented)]
 #![deny(clippy::todo)]
 
+pub mod autonomy;
 pub mod i18n;
+pub mod patch;
+pub mod permissions;
+pub mod sessions;
 
-use std::collections::HashMap;
-use std::net::{SocketAddr, TcpStream};
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 use codercraft_agent::{AgentEngine, AgentMode, AgentSession, SwarmLedger};
 use databasecraft_store::DatabaseStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::net::{SocketAddr, TcpStream};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+/// Single LLM truth for CoderCraft: the fleet-shared `craft-ai-core` config.
+/// Every craft app must use this type instead of a per-app struct
+/// (see `CRAFT_LLM_PROVIDER_STANDARD.md`). The file
+/// `~/.craft/ai_config.json` is the persistence; environment wins per-field.
+pub use craft_ai_core::{self, CraftAiConfig};
 
 pub const CONTROL_PORT: u16 = 14128;
 pub const APP_VERSION: &str = "0.2.0";
@@ -54,14 +64,6 @@ pub struct McpServerEntry {
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub is_enabled: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmConfig {
-    pub provider: String, // "Ollama", "Anthropic", "OpenAI", "DeepSeek"
-    pub endpoint: String,
-    pub model_name: String,
-    pub api_key_configured: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,7 +103,11 @@ impl OpenBuffer {
     #[must_use]
     pub fn new(path: &str, content: String) -> Self {
         let p = Path::new(path);
-        let file_name = p.file_name().and_then(|n| n.to_str()).unwrap_or("untitled").to_string();
+        let file_name = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("untitled")
+            .to_string();
         let line_count = content.lines().count();
         let language = if path.ends_with(".rs") {
             SupportedLanguage::Rust
@@ -184,7 +190,8 @@ impl FleetDepot {
                     name: "djcraft".to_string(),
                     folder_name: "djcraft".to_string(),
                     port: 14118,
-                    description: "Universal DJ Controller, Stem Separation & DVS Studio".to_string(),
+                    description: "Universal DJ Controller, Stem Separation & DVS Studio"
+                        .to_string(),
                     category: "Audio / Creative".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\djcraft\\start.bat".to_string(),
                     is_running: false,
@@ -194,7 +201,8 @@ impl FleetDepot {
                     name: "modcraft".to_string(),
                     folder_name: "modcraft".to_string(),
                     port: 14120,
-                    description: "Tracker, Synthesizer & Sound Design Audio Workstation".to_string(),
+                    description: "Tracker, Synthesizer & Sound Design Audio Workstation"
+                        .to_string(),
                     category: "Audio / Music".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\modcraft\\start.bat".to_string(),
                     is_running: false,
@@ -214,7 +222,8 @@ impl FleetDepot {
                     name: "robotcraft".to_string(),
                     folder_name: "robotcraft".to_string(),
                     port: 14115,
-                    description: "Autonomous Robotics Simulation, Kinematics & URDF CAD".to_string(),
+                    description: "Autonomous Robotics Simulation, Kinematics & URDF CAD"
+                        .to_string(),
                     category: "Robotics".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\robotcraft\\start.bat".to_string(),
                     is_running: false,
@@ -234,7 +243,8 @@ impl FleetDepot {
                     name: "travelcraft".to_string(),
                     folder_name: "travelcraft".to_string(),
                     port: 14129,
-                    description: "Autonomous Baedeker Itinerary & Offline GIS Navigator".to_string(),
+                    description: "Autonomous Baedeker Itinerary & Offline GIS Navigator"
+                        .to_string(),
                     category: "Geospatial".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\travelcraft\\start.bat".to_string(),
                     is_running: false,
@@ -254,7 +264,8 @@ impl FleetDepot {
                     name: "sportscraft".to_string(),
                     folder_name: "sportscraft".to_string(),
                     port: 14131,
-                    description: "Biometric Performance & Computer Vision Kinetic Coach".to_string(),
+                    description: "Biometric Performance & Computer Vision Kinetic Coach"
+                        .to_string(),
                     category: "Health / Kinetics".to_string(),
                     start_bat_path: "D:\\Dev\\repos\\sportscraft\\start.bat".to_string(),
                     is_running: false,
@@ -378,7 +389,28 @@ pub enum Command {
         working_dir: Option<String>,
     },
     ConfigureLlm {
-        config: LlmConfig,
+        provider: Option<String>,
+        model: Option<String>,
+        endpoint: Option<String>,
+        api_key: Option<String>,
+    },
+    LlmStatus,
+    LlmListModels {
+        provider: Option<String>,
+    },
+    LlmSelect {
+        provider: String,
+        model: String,
+    },
+    LlmSetKey {
+        provider: String,
+        api_key: String,
+    },
+    LlmEvict {
+        keep: Option<String>,
+    },
+    LlmTest {
+        prompt: Option<String>,
     },
     AgentRefactor {
         intent: String,
@@ -397,12 +429,63 @@ pub enum Command {
     StepSwarm,
     GetHelp,
     GetComparison,
+    ApplyPatch {
+        workspace_dir: String,
+        patch_text: String,
+    },
+    GlobSearch {
+        root: String,
+        pattern: String,
+    },
+    CheckPermission {
+        tool: String,
+        target: String,
+    },
+    SessionCreate {
+        session_id: Option<String>,
+        workspace_dir: String,
+        mode: String,
+        title: String,
+    },
+    SessionAppend {
+        session_id: String,
+        role: String,
+        content: String,
+        tool_calls_json: Option<String>,
+    },
+    SessionList {
+        workspace_filter: Option<String>,
+        since: Option<String>,
+        until: Option<String>,
+        limit: Option<usize>,
+    },
+    SessionSearch {
+        query: String,
+        top_k: Option<usize>,
+    },
+    SessionRecall {
+        year: i64,
+        month: u32,
+        limit: Option<usize>,
+    },
+    SessionRead {
+        session_id: String,
+        limit: Option<usize>,
+    },
+    AgentRun {
+        goal: String,
+        workspace_dir: String,
+        session_id: Option<String>,
+        max_steps: Option<usize>,
+        mode: Option<String>,
+        timeout_s: Option<u64>,
+    },
 }
 
 pub struct CoderCraftCore {
     pub active_language: SupportedLanguage,
     pub mcp_servers: Vec<McpServerEntry>,
-    pub llm_config: LlmConfig,
+    pub llm_config: CraftAiConfig,
     pub fleet_depot: FleetDepot,
     pub swarm_ledger: SwarmLedger,
 }
@@ -421,7 +504,8 @@ impl CoderCraftCore {
             mcp_servers: vec![
                 McpServerEntry {
                     name: "databasecraft".to_string(),
-                    command: "D:\\Dev\\repos\\databasecraft\\target\\debug\\databasecraft-mcp.exe".to_string(),
+                    command: "D:\\Dev\\repos\\databasecraft\\target\\debug\\databasecraft-mcp.exe"
+                        .to_string(),
                     args: vec![],
                     env: HashMap::new(),
                     is_enabled: true,
@@ -435,18 +519,14 @@ impl CoderCraftCore {
                 },
                 McpServerEntry {
                     name: "gamecraft".to_string(),
-                    command: "D:\\Dev\\repos\\gamecraft\\target\\debug\\gamecraft-mcp.exe".to_string(),
+                    command: "D:\\Dev\\repos\\gamecraft\\target\\debug\\gamecraft-mcp.exe"
+                        .to_string(),
                     args: vec![],
                     env: HashMap::new(),
                     is_enabled: true,
                 },
             ],
-            llm_config: LlmConfig {
-                provider: "Ollama".to_string(),
-                endpoint: "http://localhost:11434/api/chat".to_string(),
-                model_name: "qwen2.5-coder:32b".to_string(),
-                api_key_configured: true,
-            },
+            llm_config: CraftAiConfig::load(),
             fleet_depot: FleetDepot::new(),
             swarm_ledger: SwarmLedger::new(),
         }
@@ -459,15 +539,25 @@ impl CoderCraftCore {
             let trimmed = line.trim();
             let line_number = idx + 1;
 
-            if trimmed.starts_with("pub fn ") || trimmed.starts_with("fn ") || trimmed.starts_with("def ") {
+            if trimmed.starts_with("pub fn ")
+                || trimmed.starts_with("fn ")
+                || trimmed.starts_with("def ")
+            {
                 let name = trimmed
                     .split_whitespace()
                     .nth(if trimmed.starts_with("pub") { 2 } else { 1 })
                     .and_then(|s| s.split('(').next())
                     .unwrap_or("unknown_fn")
                     .to_string();
-                symbols.push(AstSymbol { name, kind: "fn".to_string(), line_number });
-            } else if trimmed.starts_with("pub struct ") || trimmed.starts_with("struct ") || trimmed.starts_with("class ") {
+                symbols.push(AstSymbol {
+                    name,
+                    kind: "fn".to_string(),
+                    line_number,
+                });
+            } else if trimmed.starts_with("pub struct ")
+                || trimmed.starts_with("struct ")
+                || trimmed.starts_with("class ")
+            {
                 let name = trimmed
                     .split_whitespace()
                     .nth(if trimmed.starts_with("pub") { 2 } else { 1 })
@@ -475,7 +565,11 @@ impl CoderCraftCore {
                     .unwrap_or("unknown_struct")
                     .trim()
                     .to_string();
-                symbols.push(AstSymbol { name, kind: "struct".to_string(), line_number });
+                symbols.push(AstSymbol {
+                    name,
+                    kind: "struct".to_string(),
+                    line_number,
+                });
             } else if trimmed.starts_with("pub enum ") || trimmed.starts_with("enum ") {
                 let name = trimmed
                     .split_whitespace()
@@ -484,7 +578,11 @@ impl CoderCraftCore {
                     .unwrap_or("unknown_enum")
                     .trim()
                     .to_string();
-                symbols.push(AstSymbol { name, kind: "enum".to_string(), line_number });
+                symbols.push(AstSymbol {
+                    name,
+                    kind: "enum".to_string(),
+                    line_number,
+                });
             } else if trimmed.starts_with("pub trait ") || trimmed.starts_with("trait ") {
                 let name = trimmed
                     .split_whitespace()
@@ -493,10 +591,24 @@ impl CoderCraftCore {
                     .unwrap_or("unknown_trait")
                     .trim()
                     .to_string();
-                symbols.push(AstSymbol { name, kind: "trait".to_string(), line_number });
+                symbols.push(AstSymbol {
+                    name,
+                    kind: "trait".to_string(),
+                    line_number,
+                });
             } else if trimmed.starts_with("impl ") {
-                let name = trimmed.trim_start_matches("impl ").split('{').next().unwrap_or("impl").trim().to_string();
-                symbols.push(AstSymbol { name, kind: "impl".to_string(), line_number });
+                let name = trimmed
+                    .trim_start_matches("impl ")
+                    .split('{')
+                    .next()
+                    .unwrap_or("impl")
+                    .trim()
+                    .to_string();
+                symbols.push(AstSymbol {
+                    name,
+                    kind: "impl".to_string(),
+                    line_number,
+                });
             }
         }
         symbols
@@ -504,7 +616,11 @@ impl CoderCraftCore {
 
     #[must_use]
     pub fn scan_tree(root: &Path, depth: usize, max_depth: usize) -> FileTreeNode {
-        let name = root.file_name().and_then(|n| n.to_str()).unwrap_or("root").to_string();
+        let name = root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("root")
+            .to_string();
         let path_str = root.to_string_lossy().to_string();
 
         if !root.is_dir() {
@@ -527,7 +643,10 @@ impl CoderCraftCore {
                     let file_name = entry.file_name();
                     let name_str = file_name.to_string_lossy();
                     // Skip bulky folders
-                    if name_str.starts_with('.') || name_str == "target" || name_str == "node_modules" {
+                    if name_str.starts_with('.')
+                        || name_str == "target"
+                        || name_str == "node_modules"
+                    {
                         continue;
                     }
                     children.push(Self::scan_tree(&entry_path, depth + 1, max_depth));
@@ -551,7 +670,11 @@ impl CoderCraftCore {
                 language: SupportedLanguage::Rust,
                 command: "cargo".to_string(),
                 default_args: vec!["clippy".to_string(), "--all-targets".to_string()],
-                auto_fix_args: vec!["clippy".to_string(), "--fix".to_string(), "--allow-no-vcs".to_string()],
+                auto_fix_args: vec![
+                    "clippy".to_string(),
+                    "--fix".to_string(),
+                    "--allow-no-vcs".to_string(),
+                ],
             },
             SupportedLanguage::Python => LinterConfig {
                 language: SupportedLanguage::Python,
@@ -620,8 +743,13 @@ impl CoderCraftCore {
         }
     }
 
-    pub fn read_file_range(path: &str, start: Option<usize>, end: Option<usize>) -> Result<String, String> {
-        let content = std::fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
+    pub fn read_file_range(
+        path: &str,
+        start: Option<usize>,
+        end: Option<usize>,
+    ) -> Result<String, String> {
+        let content =
+            std::fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
         let lines: Vec<&str> = content.lines().collect();
         let s = start.unwrap_or(1).saturating_sub(1);
         let e = end.unwrap_or(lines.len()).min(lines.len());
@@ -639,7 +767,8 @@ impl CoderCraftCore {
     }
 
     pub fn apply_hunk_edit(path: &str, target: &str, replacement: &str) -> Result<(), String> {
-        let content = std::fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
+        let content =
+            std::fs::read_to_string(path).map_err(|e| format!("Failed to read {path}: {e}"))?;
         if !content.contains(target) {
             return Err(format!("Target block not found in {path}"));
         }
@@ -678,7 +807,11 @@ impl CoderCraftCore {
                     if let Ok(content) = std::fs::read_to_string(&p) {
                         for (idx, line) in content.lines().enumerate() {
                             if line.contains(query) {
-                                results.push((p.to_string_lossy().to_string(), idx + 1, line.to_string()));
+                                results.push((
+                                    p.to_string_lossy().to_string(),
+                                    idx + 1,
+                                    line.to_string(),
+                                ));
                                 if results.len() >= max_matches {
                                     return Ok(());
                                 }
@@ -692,8 +825,88 @@ impl CoderCraftCore {
     }
 }
 
-pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
+/// Redacted LLM view for API responses: everything except secret values.
+/// Keys are presence flags only — a key must never round-trip through JSON.
+fn redacted_llm_view(config: &CraftAiConfig) -> Value {
+    let kind = craft_ai_core::providers::resolve_provider(&config.provider);
+    let effective_endpoint = kind
+        .map(|k| craft_ai_core::providers::default_endpoint(config, k))
+        .unwrap_or_default();
+    let present = |k: craft_ai_core::ProviderKind| {
+        config
+            .get_api_key(k)
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+    };
+    json!({
+        "provider": config.provider,
+        "provider_known": kind.is_some(),
+        "model": config.model,
+        "ollama_endpoint": config.ollama_endpoint,
+        "lmstudio_endpoint": config.lmstudio_endpoint,
+        "endpoint_override": config.endpoint_override,
+        "custom_endpoint": config.custom_endpoint,
+        "effective_endpoint": effective_endpoint,
+        "keys_present": {
+            "openai": present(craft_ai_core::ProviderKind::OpenAi),
+            "anthropic": present(craft_ai_core::ProviderKind::Anthropic),
+            "deepseek": present(craft_ai_core::ProviderKind::DeepSeek),
+            "meta": present(craft_ai_core::ProviderKind::Meta),
+            "openrouter": present(craft_ai_core::ProviderKind::OpenRouter),
+            "custom": present(craft_ai_core::ProviderKind::Custom),
+        }
+    })
+}
+
+/// Store an API key in the matching provider slot. Local providers have no
+/// slot: storing a key for them is refused instead of silently dropped.
+fn store_api_key(
+    config: &mut CraftAiConfig,
+    provider: &str,
+    api_key: &str,
+) -> Result<String, String> {
+    let kind = craft_ai_core::providers::resolve_provider(provider)
+        .ok_or_else(|| format!("unknown provider '{provider}'"))?;
+    match kind {
+        craft_ai_core::ProviderKind::Ollama | craft_ai_core::ProviderKind::LMStudio => {
+            Err(format!(
+                "{} needs no API key",
+                craft_ai_core::providers::provider_id(kind)
+            ))
+        }
+        craft_ai_core::ProviderKind::OpenAi => {
+            config.openai_api_key = api_key.to_string();
+            Ok("openai".to_string())
+        }
+        craft_ai_core::ProviderKind::Anthropic => {
+            config.anthropic_api_key = api_key.to_string();
+            Ok("anthropic".to_string())
+        }
+        craft_ai_core::ProviderKind::DeepSeek => {
+            config.deepseek_api_key = api_key.to_string();
+            Ok("deepseek".to_string())
+        }
+        craft_ai_core::ProviderKind::Meta => {
+            config.meta_api_key = api_key.to_string();
+            Ok("meta".to_string())
+        }
+        craft_ai_core::ProviderKind::OpenRouter => {
+            config.openrouter_api_key = api_key.to_string();
+            Ok("openrouter".to_string())
+        }
+        craft_ai_core::ProviderKind::Custom => {
+            config.custom_api_key = api_key.to_string();
+            Ok("custom".to_string())
+        }
+    }
+}
+
+pub async fn dispatch(cmd: Command, store: &DatabaseStore) -> Value {
     let mut core = CoderCraftCore::new();
+    // Eternal memory tables exist from here on; a corrupt sessions.db must
+    // never break the file tools, so schema errors are tolerated outside
+    // the session commands themselves.
+    let _ = sessions::ensure_schema(store);
 
     match cmd {
         Command::Status => {
@@ -706,13 +919,16 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
                 "active_language": core.active_language,
                 "mcp_servers_registered": core.mcp_servers.len(),
                 "llm_provider": core.llm_config.provider,
+                "llm_model": core.llm_config.model,
                 "fleet_projects_indexed": core.fleet_depot.projects.len(),
                 "swarm_workers_active": core.swarm_ledger.workers.len(),
                 "capabilities": [
                     "OpenCodeBackbone", "ClaudeDesktopParity", "McpServerRegistry",
                     "IntegratedBashConsole", "AstTreeSitter", "StigmergicSwarm",
                     "QuadDisplayViewports", "FleetProjectDepot", "BezierNodeGraph",
-                    "MultiBufferEditor", "AstSymbolOutline"
+                    "MultiBufferEditor", "AstSymbolOutline", "AutonomousGoalLoop",
+                    "EternalSessionMemory", "PermissionGate", "MultiFilePatch",
+                    "GitignoreAwareGlob"
                 ],
                 "success": true
             })
@@ -728,22 +944,42 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
                 "status": if exists { "BUFFER_MAPPED" } else { "FILE_NOT_FOUND" }
             })
         }
-        Command::ReadFileRange { path, start_line, end_line } => {
-            match CoderCraftCore::read_file_range(&path, start_line, end_line) {
-                Ok(content) => json!({ "success": true, "path": path, "content": content }),
-                Err(e) => json!({ "success": false, "error": e }),
-            }
-        }
+        Command::ReadFileRange {
+            path,
+            start_line,
+            end_line,
+        } => match CoderCraftCore::read_file_range(&path, start_line, end_line) {
+            Ok(content) => json!({ "success": true, "path": path, "content": content }),
+            Err(e) => json!({ "success": false, "error": e }),
+        },
         Command::WriteFile { path, content } => {
-            match CoderCraftCore::write_file(&path, &content) {
-                Ok(()) => json!({ "success": true, "path": path, "status": "SAVED" }),
-                Err(e) => json!({ "success": false, "error": e }),
+            let v = permissions::check_tool("write", &path);
+            if v.decision == "deny" {
+                json!({ "success": false, "permission": v.decision, "reason": v.reason, "path": path })
+            } else {
+                match CoderCraftCore::write_file(&path, &content) {
+                    Ok(()) => {
+                        json!({ "success": true, "path": path, "status": "SAVED", "permission": v.decision, "reason": v.reason })
+                    }
+                    Err(e) => json!({ "success": false, "error": e, "permission": v.decision }),
+                }
             }
         }
-        Command::ApplyHunkEdit { path, target, replacement } => {
-            match CoderCraftCore::apply_hunk_edit(&path, &target, &replacement) {
-                Ok(()) => json!({ "success": true, "path": path, "status": "HUNK_APPLIED" }),
-                Err(e) => json!({ "success": false, "error": e }),
+        Command::ApplyHunkEdit {
+            path,
+            target,
+            replacement,
+        } => {
+            let v = permissions::check_tool("edit", &path);
+            if v.decision == "deny" {
+                json!({ "success": false, "permission": v.decision, "reason": v.reason, "path": path })
+            } else {
+                match CoderCraftCore::apply_hunk_edit(&path, &target, &replacement) {
+                    Ok(()) => {
+                        json!({ "success": true, "path": path, "status": "HUNK_APPLIED", "permission": v.decision })
+                    }
+                    Err(e) => json!({ "success": false, "error": e, "permission": v.decision }),
+                }
             }
         }
         Command::GrepSearch { root, query } => {
@@ -757,15 +993,13 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
                 }).collect::<Vec<_>>()
             })
         }
-        Command::ExtractSymbols { path } => {
-            match std::fs::read_to_string(&path) {
-                Ok(source) => {
-                    let symbols = CoderCraftCore::extract_ast_symbols(&source, &core.active_language);
-                    json!({ "success": true, "path": path, "symbols": symbols })
-                }
-                Err(e) => json!({ "success": false, "error": format!("Cannot read file: {e}") }),
+        Command::ExtractSymbols { path } => match std::fs::read_to_string(&path) {
+            Ok(source) => {
+                let symbols = CoderCraftCore::extract_ast_symbols(&source, &core.active_language);
+                json!({ "success": true, "path": path, "symbols": symbols })
             }
-        }
+            Err(e) => json!({ "success": false, "error": format!("Cannot read file: {e}") }),
+        },
         Command::IndexWorkspace { workspace_dir } => {
             let tree = CoderCraftCore::scan_tree(Path::new(&workspace_dir), 0, 3);
             let instructions = CoderCraftCore::discover_instructions(&workspace_dir);
@@ -789,7 +1023,10 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
                 "instructions": instructions
             })
         }
-        Command::ScanWorkspaceTree { root_path, max_depth } => {
+        Command::ScanWorkspaceTree {
+            root_path,
+            max_depth,
+        } => {
             let depth = max_depth.unwrap_or(2);
             let tree = CoderCraftCore::scan_tree(Path::new(&root_path), 0, depth);
             json!({
@@ -804,11 +1041,19 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
                 "language": core.active_language
             })
         }
-        Command::RunLinter { workspace_dir, auto_fix } => {
+        Command::RunLinter {
+            workspace_dir,
+            auto_fix,
+        } => {
             let linter = CoderCraftCore::get_linter_for(&core.active_language);
-            let args = if auto_fix { &linter.auto_fix_args } else { &linter.default_args };
+            let args = if auto_fix {
+                &linter.auto_fix_args
+            } else {
+                &linter.default_args
+            };
             let cmd_str = format!("{} {}", linter.command, args.join(" "));
-            let (code, stdout, stderr) = CoderCraftCore::execute_shell(&cmd_str, Some(&workspace_dir));
+            let (code, stdout, stderr) =
+                CoderCraftCore::execute_shell(&cmd_str, Some(&workspace_dir));
             json!({
                 "success": code == 0,
                 "exit_code": code,
@@ -843,30 +1088,178 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
                 "servers": core.mcp_servers
             })
         }
-        Command::ExecuteConsoleCommand { command_line, working_dir } => {
-            let (code, stdout, stderr) = CoderCraftCore::execute_shell(&command_line, working_dir.as_deref());
-            json!({
-                "success": code == 0,
-                "exit_code": code,
-                "stdout": stdout,
-                "stderr": stderr
-            })
+        Command::ExecuteConsoleCommand {
+            command_line,
+            working_dir,
+        } => {
+            let v = permissions::check_tool("shell", &command_line);
+            if v.decision == "deny" {
+                json!({ "success": false, "permission": v.decision, "reason": v.reason })
+            } else {
+                let (code, stdout, stderr) =
+                    CoderCraftCore::execute_shell(&command_line, working_dir.as_deref());
+                json!({
+                    "success": code == 0,
+                    "exit_code": code,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "permission": v.decision,
+                    "permission_reason": v.reason
+                })
+            }
         }
-        Command::ConfigureLlm { config } => {
-            core.llm_config = config;
+        Command::ConfigureLlm {
+            provider,
+            model,
+            endpoint,
+            api_key,
+        } => {
+            let mut cfg = CraftAiConfig::load();
+            if let Some(p) = provider {
+                if p.trim().is_empty() {
+                    return json!({ "success": false, "error": "empty provider" });
+                }
+                if craft_ai_core::providers::resolve_provider(&p).is_none() {
+                    return json!({ "success": false, "error": format!("unknown provider '{p}'") });
+                }
+                cfg.provider = p;
+            }
+            if let Some(m) = model {
+                cfg.model = m;
+            }
+            if let Some(e) = endpoint {
+                cfg.endpoint_override = e;
+            }
+            if let Some(k) = api_key {
+                if k.trim().is_empty() {
+                    return json!({ "success": false, "error": "empty api_key" });
+                }
+                let target = cfg.provider.clone();
+                if let Err(e) = store_api_key(&mut cfg, &target, &k) {
+                    return json!({ "success": false, "error": e });
+                }
+            }
+            match cfg.save() {
+                Ok(()) => {
+                    core.llm_config = cfg.clone();
+                    json!({ "success": true, "config": redacted_llm_view(&cfg) })
+                }
+                Err(e) => json!({ "success": false, "error": e.to_string() }),
+            }
+        }
+        Command::LlmStatus => {
+            let cfg = CraftAiConfig::load();
+            let kind = craft_ai_core::providers::resolve_provider(&cfg.provider);
+            let probe = kind.map(|k| craft_ai_core::providers::probe(&cfg, k));
             json!({
                 "success": true,
-                "llm_config": core.llm_config
+                "config": redacted_llm_view(&cfg),
+                "probe": probe,
             })
         }
-        Command::AgentRefactor { intent, target_file } => {
+        Command::LlmListModels { provider } => {
+            let cfg = CraftAiConfig::load();
+            let name = provider.as_deref().unwrap_or(&cfg.provider).to_string();
+            let kind = match craft_ai_core::providers::resolve_provider(&name) {
+                Some(k) => k,
+                None => {
+                    return json!({ "success": false, "error": format!("unknown provider '{name}'") })
+                }
+            };
+            match craft_ai_core::providers::list_models(&cfg, kind) {
+                Ok(models) => json!({
+                    "success": true,
+                    "provider": craft_ai_core::providers::provider_id(kind),
+                    "count": models.len(),
+                    "models": models,
+                }),
+                Err(e) => json!({ "success": false, "provider": name, "error": e.to_string() }),
+            }
+        }
+        Command::LlmSelect { provider, model } => {
+            let kind = match craft_ai_core::providers::resolve_provider(&provider) {
+                Some(k) => k,
+                None => {
+                    return json!({ "success": false, "error": format!("unknown provider '{provider}'") })
+                }
+            };
+            if model.trim().is_empty() {
+                return json!({ "success": false, "error": "empty model (nothing auto-selected)" });
+            }
+            let mut cfg = CraftAiConfig::load();
+            cfg.provider = craft_ai_core::providers::provider_id(kind).to_string();
+            cfg.model = model.clone();
+            if let Err(e) = cfg.save() {
+                return json!({ "success": false, "error": e.to_string() });
+            }
+            core.llm_config = cfg.clone();
+            // Saving a selection switches VRAM, not just config (Ollama only;
+            // other providers are stateless from our side).
+            let switch = if kind == craft_ai_core::ProviderKind::Ollama {
+                Some(craft_ai_core::providers::switch_ollama_model(&cfg, &model))
+            } else {
+                None
+            };
+            json!({
+                "success": true,
+                "config": redacted_llm_view(&cfg),
+                "switch": switch,
+            })
+        }
+        Command::LlmSetKey { provider, api_key } => {
+            let mut cfg = CraftAiConfig::load();
+            if api_key.trim().is_empty() {
+                return json!({ "success": false, "error": "empty api_key" });
+            }
+            match store_api_key(&mut cfg, &provider, &api_key) {
+                Ok(slot) => match cfg.save() {
+                    Ok(()) => {
+                        core.llm_config = cfg.clone();
+                        json!({ "success": true, "slot": slot, "config": redacted_llm_view(&cfg) })
+                    }
+                    Err(e) => json!({ "success": false, "error": e.to_string() }),
+                },
+                Err(e) => json!({ "success": false, "error": e }),
+            }
+        }
+        Command::LlmEvict { keep } => {
+            let cfg = CraftAiConfig::load();
+            let report =
+                craft_ai_core::providers::switch_ollama_model(&cfg, keep.as_deref().unwrap_or(""));
+            json!({ "success": true, "evicted": report.evicted, "warmed": report.warmed, "engine": report.engine })
+        }
+        Command::LlmTest { prompt } => {
+            let cfg = CraftAiConfig::load();
+            let client = craft_ai_core::CraftAiClient::with_config(cfg);
+            let probe_text = prompt.unwrap_or_else(|| "Reply with exactly: OK".to_string());
+            let reply = tokio::time::timeout(
+                std::time::Duration::from_secs(90),
+                client.complete("You are a connectivity probe. Reply briefly.", &probe_text),
+            )
+            .await;
+            match reply {
+                Ok(Ok(text)) => {
+                    let short: String = text.chars().take(300).collect();
+                    json!({ "success": true, "reply": short })
+                }
+                Ok(Err(e)) => json!({ "success": false, "error": e.to_string() }),
+                Err(_) => json!({ "success": false, "error": "probe timed out after 90s" }),
+            }
+        }
+        Command::AgentRefactor {
+            intent,
+            target_file,
+        } => {
             let proposal = AgentEngine::synthesize_refactor(&intent, &target_file);
             json!({
                 "success": true,
                 "proposal": proposal
             })
         }
-        Command::AgentPlan { goal, workspace_dir } => {
+        Command::AgentPlan {
+            goal,
+            workspace_dir,
+        } => {
             let mut session = AgentSession::new("session-plan", AgentMode::Plan, &workspace_dir);
             let plan_text = session.generate_step_plan(&goal);
             json!({
@@ -914,6 +1307,132 @@ pub async fn dispatch(cmd: Command, _store: &DatabaseStore) -> Value {
                 "success": true,
                 "tasks": core.swarm_ledger.tasks
             })
+        }
+        Command::ApplyPatch {
+            workspace_dir,
+            patch_text,
+        } => {
+            let v = permissions::check_tool("patch", &workspace_dir);
+            if v.decision == "deny" {
+                json!({ "success": false, "permission": v.decision, "reason": v.reason })
+            } else {
+                match patch::apply_patch_text(&workspace_dir, &patch_text) {
+                    Ok(files) => {
+                        json!({ "success": true, "workspace": workspace_dir, "applied": files, "permission": v.decision })
+                    }
+                    Err(e) => json!({ "success": false, "error": e, "permission": v.decision }),
+                }
+            }
+        }
+        Command::GlobSearch { root, pattern } => {
+            let _ = permissions::check_tool("glob", &root);
+            let files = patch::glob_files(&root, &pattern);
+            json!({ "success": true, "root": root, "pattern": pattern, "match_count": files.len(), "files": files })
+        }
+        Command::CheckPermission { tool, target } => {
+            let v = permissions::check_tool(&tool, &target);
+            json!({ "success": true, "tool": tool, "target": target, "decision": v.decision, "reason": v.reason })
+        }
+        Command::SessionCreate {
+            session_id,
+            workspace_dir,
+            mode,
+            title,
+        } => {
+            match sessions::create_session(
+                store,
+                session_id.as_deref().unwrap_or(""),
+                &workspace_dir,
+                &mode,
+                &title,
+            ) {
+                Ok(id) => {
+                    json!({ "success": true, "session_id": id, "workspace": workspace_dir, "mode": mode, "title": title })
+                }
+                Err(e) => json!({ "success": false, "error": e.to_string() }),
+            }
+        }
+        Command::SessionAppend {
+            session_id,
+            role,
+            content,
+            tool_calls_json,
+        } => {
+            match sessions::append_turn(
+                store,
+                &session_id,
+                &role,
+                &content,
+                tool_calls_json.as_deref().unwrap_or("{}"),
+            ) {
+                Ok(turn_id) => {
+                    json!({ "success": true, "session_id": session_id, "turn_id": turn_id })
+                }
+                Err(e) => json!({ "success": false, "error": e.to_string() }),
+            }
+        }
+        Command::SessionList {
+            workspace_filter,
+            since,
+            until,
+            limit,
+        } => {
+            match sessions::list_sessions(
+                store,
+                workspace_filter.as_deref(),
+                since.as_deref(),
+                until.as_deref(),
+                limit.unwrap_or(50),
+            ) {
+                Ok(items) => json!({ "success": true, "count": items.len(), "sessions": items }),
+                Err(e) => json!({ "success": false, "error": e.to_string() }),
+            }
+        }
+        Command::SessionSearch { query, top_k } => {
+            match sessions::search(store, &query, top_k.unwrap_or(10)) {
+                Ok(hits) => {
+                    json!({ "success": true, "query": query, "count": hits.len(), "hits": hits })
+                }
+                Err(e) => json!({ "success": false, "error": e.to_string() }),
+            }
+        }
+        Command::SessionRecall { year, month, limit } => {
+            match sessions::recall_month(store, year, month, limit.unwrap_or(100)) {
+                Ok(turns) => {
+                    json!({ "success": true, "year": year, "month": month, "count": turns.len(), "turns": turns })
+                }
+                Err(e) => json!({ "success": false, "error": e.to_string() }),
+            }
+        }
+        Command::SessionRead { session_id, limit } => {
+            match sessions::read_session(store, &session_id, limit.unwrap_or(200)) {
+                Ok(turns) => {
+                    json!({ "success": true, "session_id": session_id, "count": turns.len(), "turns": turns })
+                }
+                Err(e) => json!({ "success": false, "error": e.to_string() }),
+            }
+        }
+        Command::AgentRun {
+            goal,
+            workspace_dir,
+            session_id,
+            max_steps,
+            mode,
+            timeout_s,
+        } => {
+            autonomy::run_goal(
+                store,
+                autonomy::RunRequest {
+                    workspace_dir,
+                    goal,
+                    session_id,
+                    max_steps,
+                    mode: mode.unwrap_or_else(|| "build".to_string()),
+                    timeout_s: timeout_s.unwrap_or_else(autonomy::default_timeout_s),
+                    brain: None,
+                },
+            )
+            .await
         }
         Command::GetHelp => {
             json!({

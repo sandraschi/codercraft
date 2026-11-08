@@ -309,7 +309,8 @@ impl SwarmLedger {
                     required_role: WorkerRole::Architect,
                     state: TaskState::Committed,
                     pheromone: 0.95,
-                    log: "All 11 fleet craft ports mapped into clickable launcher depot".to_string(),
+                    log: "All 11 fleet craft ports mapped into clickable launcher depot"
+                        .to_string(),
                     pos_x: 480.0,
                     pos_y: 250.0,
                     linked_worker_id: Some("worker-arch-01".to_string()),
@@ -365,13 +366,16 @@ impl SwarmLedger {
             log: format!("Task '{title}' deposited in swarm environment."),
             pos_x: 480.0,
             pos_y: y_offset,
-            linked_worker_id: Some(match role {
-                WorkerRole::Architect => "worker-arch-01",
-                WorkerRole::Coder => "worker-coder-02",
-                WorkerRole::ClippyLinter => "worker-lint-03",
-                WorkerRole::TestRunner => "worker-test-04",
-                WorkerRole::DocSync => "worker-docs-05",
-            }.to_string()),
+            linked_worker_id: Some(
+                match role {
+                    WorkerRole::Architect => "worker-arch-01",
+                    WorkerRole::Coder => "worker-coder-02",
+                    WorkerRole::ClippyLinter => "worker-lint-03",
+                    WorkerRole::TestRunner => "worker-test-04",
+                    WorkerRole::DocSync => "worker-docs-05",
+                }
+                .to_string(),
+            ),
         });
     }
 }

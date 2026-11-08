@@ -68,6 +68,24 @@ pub struct CoderCraftApp {
     pub show_auth_modal: bool,
     pub show_about_dialog: bool,
     pub active_help_tab: usize,
+
+    // LLM Settings tab state (fleet CRAFT_LLM_PROVIDER_STANDARD contract).
+    // Secrets are write-only: key fields start empty every launch, only
+    // non-empty entries are persisted, presence is shown as set/unset dots.
+    pub llm_provider_pick: String,
+    pub llm_endpoint_edit: String,
+    pub llm_model_edit: String,
+    pub llm_models_cache: Vec<String>,
+    pub llm_key_openai: String,
+    pub llm_key_anthropic: String,
+    pub llm_key_deepseek: String,
+    pub llm_key_meta: String,
+    pub llm_key_openrouter: String,
+    pub llm_key_custom: String,
+    pub llm_status_line: String,
+    pub llm_vram_line: String,
+    pub llm_job_running: bool,
+    pub llm_result_rx: Option<std::sync::mpsc::Receiver<String>>,
 }
 
 impl CoderCraftApp {
@@ -85,8 +103,10 @@ impl CoderCraftApp {
         // Default open buffer: codercraft Cargo.toml
         let initial_cargo = std::fs::read_to_string("D:\\Dev\\repos\\codercraft\\Cargo.toml")
             .unwrap_or_else(|_| "[workspace]\nmembers = []\n".to_string());
-        let default_buffer = OpenBuffer::new("D:\\Dev\\repos\\codercraft\\Cargo.toml", initial_cargo);
-        let symbols = CoderCraftCore::extract_ast_symbols(&default_buffer.content, &default_buffer.language);
+        let default_buffer =
+            OpenBuffer::new("D:\\Dev\\repos\\codercraft\\Cargo.toml", initial_cargo);
+        let symbols =
+            CoderCraftCore::extract_ast_symbols(&default_buffer.content, &default_buffer.language);
 
         Ok(Self {
             store,
@@ -103,13 +123,18 @@ impl CoderCraftApp {
             chat_prompt: String::new(),
             terminal_input: String::new(),
             terminal_logs: vec![
-                "[bash] sovereign shell container initialized at D:\\Dev\\repos\\codercraft".to_string(),
+                "[bash] sovereign shell container initialized at D:\\Dev\\repos\\codercraft"
+                    .to_string(),
                 "[mcp] fastmcp stdio bus online (port 14128)".to_string(),
-                "[depot] fleet craft ports probed: DatabaseCraft, AppCraft, DJCraft, ModCraft".to_string(),
-                "[swarm] 5 stigmergic specialist agents active with zero-panic containment".to_string(),
+                "[depot] fleet craft ports probed: DatabaseCraft, AppCraft, DJCraft, ModCraft"
+                    .to_string(),
+                "[swarm] 5 stigmergic specialist agents active with zero-panic containment"
+                    .to_string(),
             ],
             active_tab: ActiveRightTab::CodeEditor,
-            status_msg: format!("CoderCraft v{APP_VERSION} Sovereign Studio Online (Port {CONTROL_PORT})"),
+            status_msg: format!(
+                "CoderCraft v{APP_VERSION} Sovereign Studio Online (Port {CONTROL_PORT})"
+            ),
 
             enable_quad_viewports: false,
             detected_display_count: 4,
@@ -124,9 +149,69 @@ impl CoderCraftApp {
             show_auth_modal: false,
             show_about_dialog: false,
             active_help_tab: 0,
+
+            llm_provider_pick: { codercraft_core::craft_ai_core::CraftAiConfig::load().provider },
+            llm_endpoint_edit: String::new(),
+            llm_model_edit: { codercraft_core::craft_ai_core::CraftAiConfig::load().model },
+            llm_models_cache: vec![],
+            llm_key_openai: String::new(),
+            llm_key_anthropic: String::new(),
+            llm_key_deepseek: String::new(),
+            llm_key_meta: String::new(),
+            llm_key_openrouter: String::new(),
+            llm_key_custom: String::new(),
+            llm_status_line: String::new(),
+            llm_vram_line: String::new(),
+            llm_job_running: false,
+            llm_result_rx: None,
         })
     }
 
+    /// Run a blocking LLM job off the UI thread; the result lands in
+    /// `llm_status_line` (and the model cache) on the next frame.
+    /// Only one job at a time: extra clicks while busy are ignored.
+    pub fn llm_spawn(&mut self, label: &str, job: impl FnOnce() -> String + Send + 'static) {
+        if self.llm_job_running {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.llm_result_rx = Some(rx);
+        self.llm_job_running = true;
+        self.llm_status_line = format!("{label} ...");
+        std::thread::spawn(move || {
+            let out = job();
+            let _ = tx.send(out);
+        });
+    }
+
+    /// Poll the worker result (non-blocking). Handles MODEL_CACHE/VRAMLINE prefixes.
+    pub fn llm_poll(&mut self) {
+        if !self.llm_job_running {
+            return;
+        }
+        let done: Option<String> = self
+            .llm_result_rx
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok());
+        if let Some(msg) = done {
+            if let Some(rest) = msg.strip_prefix("MODEL_CACHE:") {
+                match serde_json::from_str::<Vec<String>>(rest) {
+                    Ok(models) => {
+                        self.llm_status_line = format!("{} models listed", models.len());
+                        self.llm_models_cache = models;
+                    }
+                    Err(_) => self.llm_status_line = msg,
+                }
+            } else if let Some(rest) = msg.strip_prefix("VRAMLINE:") {
+                self.llm_vram_line = rest.to_string();
+                self.llm_status_line = "telemetry refreshed".to_string();
+            } else {
+                self.llm_status_line = msg;
+            }
+            self.llm_job_running = false;
+            self.llm_result_rx = None;
+        }
+    }
     pub fn apply_bespoke_visuals(&self, ctx: &egui::Context) {
         let mut visuals = if self.is_dark_theme {
             egui::Visuals::dark()
@@ -140,13 +225,17 @@ impl CoderCraftApp {
             visuals.window_fill = egui::Color32::from_rgb(15, 18, 26);
             visuals.hyperlink_color = egui::Color32::from_rgb(88, 166, 255);
             visuals.selection.bg_fill = egui::Color32::from_rgb(46, 75, 120);
-            visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(88, 166, 255));
+            visuals.selection.stroke =
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(88, 166, 255));
             visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgb(22, 27, 36);
-            visuals.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(38, 46, 62));
+            visuals.widgets.noninteractive.bg_stroke =
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(38, 46, 62));
             visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(26, 32, 44);
-            visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 55, 72));
+            visuals.widgets.inactive.bg_stroke =
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 55, 72));
             visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(36, 45, 62);
-            visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(88, 166, 255));
+            visuals.widgets.hovered.bg_stroke =
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(88, 166, 255));
             visuals.widgets.active.bg_fill = egui::Color32::from_rgb(44, 56, 78);
         }
 
@@ -162,158 +251,301 @@ impl eframe::App for CoderCraftApp {
         egui::Panel::top("desktop_menu_bar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 let loc = self.locale;
-                ui.menu_button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::File, loc), |ui| {
-                    if ui.button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::OpenWorkspace, loc)).clicked() {
-                        self.status_msg = "Select a repo from the left sidebar".to_string();
-                        ui.close();
-                    }
-                    if ui.button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::SaveActiveBuffer, loc)).clicked() {
-                        if let Some(buf) = self.open_buffers.get_mut(self.active_buffer_idx) {
-                            if let Ok(()) = buf.save() {
-                                self.status_msg = format!("Saved buffer: {}", buf.file_name);
+                ui.menu_button(
+                    codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::File, loc),
+                    |ui| {
+                        if ui
+                            .button(codercraft_core::i18n::t(
+                                codercraft_core::i18n::I18nKey::OpenWorkspace,
+                                loc,
+                            ))
+                            .clicked()
+                        {
+                            self.status_msg = "Select a repo from the left sidebar".to_string();
+                            ui.close();
+                        }
+                        if ui
+                            .button(codercraft_core::i18n::t(
+                                codercraft_core::i18n::I18nKey::SaveActiveBuffer,
+                                loc,
+                            ))
+                            .clicked()
+                        {
+                            if let Some(buf) = self.open_buffers.get_mut(self.active_buffer_idx) {
+                                if let Ok(()) = buf.save() {
+                                    self.status_msg = format!("Saved buffer: {}", buf.file_name);
+                                }
+                            }
+                            ui.close();
+                        }
+                        if ui
+                            .button(codercraft_core::i18n::t(
+                                codercraft_core::i18n::I18nKey::FleetProjectDepot,
+                                loc,
+                            ))
+                            .clicked()
+                        {
+                            self.current_screen = StudioScreenMode::FleetDepot;
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui
+                            .button(codercraft_core::i18n::t(
+                                codercraft_core::i18n::I18nKey::Exit,
+                                loc,
+                            ))
+                            .clicked()
+                        {
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    },
+                );
+
+                ui.menu_button(
+                    codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::Screens, loc),
+                    |ui| {
+                        if ui
+                            .button(format!(
+                                "💻 {}",
+                                codercraft_core::i18n::t(
+                                    codercraft_core::i18n::I18nKey::IdeStudio,
+                                    loc
+                                )
+                            ))
+                            .clicked()
+                        {
+                            self.current_screen = StudioScreenMode::IdeStudio;
+                            ui.close();
+                        }
+                        if ui
+                            .button(format!(
+                                "🚀 {}",
+                                codercraft_core::i18n::t(
+                                    codercraft_core::i18n::I18nKey::FleetDepotScreen,
+                                    loc
+                                )
+                            ))
+                            .clicked()
+                        {
+                            self.current_screen = StudioScreenMode::FleetDepot;
+                            ui.close();
+                        }
+                        if ui
+                            .button(format!(
+                                "🐝 {}",
+                                codercraft_core::i18n::t(
+                                    codercraft_core::i18n::I18nKey::SwarmSupervisor,
+                                    loc
+                                )
+                            ))
+                            .clicked()
+                        {
+                            self.current_screen = StudioScreenMode::SwarmSupervisor;
+                            ui.close();
+                        }
+                        if ui
+                            .button(format!(
+                                "🖥️ {}",
+                                codercraft_core::i18n::t(
+                                    codercraft_core::i18n::I18nKey::QuadDisplayConfig,
+                                    loc
+                                )
+                            ))
+                            .clicked()
+                        {
+                            self.current_screen = StudioScreenMode::QuadDisplayConfig;
+                            ui.close();
+                        }
+                        ui.separator();
+                        let quad_label = if self.enable_quad_viewports {
+                            "✅ Quad Viewports Enabled"
+                        } else {
+                            "⬜ Enable Quad Viewports Across All Displays"
+                        };
+                        if ui.button(quad_label).clicked() {
+                            self.enable_quad_viewports = !self.enable_quad_viewports;
+                            self.status_msg = if self.enable_quad_viewports {
+                                "Quad-display viewports spawned across connected monitors"
+                                    .to_string()
+                            } else {
+                                "Consolidated into primary display".to_string()
+                            };
+                            ui.close();
+                        }
+                    },
+                );
+
+                ui.menu_button(
+                    codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::AgentMode, loc),
+                    |ui| {
+                        if ui
+                            .button(format!(
+                                "🔨 {}",
+                                codercraft_core::i18n::t(
+                                    codercraft_core::i18n::I18nKey::BuildMode,
+                                    loc
+                                )
+                            ))
+                            .clicked()
+                        {
+                            self.agent_session.set_mode(AgentMode::Build);
+                            self.status_msg =
+                                "Agent mode: BUILD (Active code modification enabled)".to_string();
+                            ui.close();
+                        }
+                        if ui
+                            .button(format!(
+                                "📋 {}",
+                                codercraft_core::i18n::t(
+                                    codercraft_core::i18n::I18nKey::PlanMode,
+                                    loc
+                                )
+                            ))
+                            .clicked()
+                        {
+                            self.agent_session.set_mode(AgentMode::Plan);
+                            self.status_msg =
+                                "Agent mode: PLAN (Read-only exploration & roadmap synthesis)"
+                                    .to_string();
+                            ui.close();
+                        }
+                    },
+                );
+
+                ui.menu_button(
+                    codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::View, loc),
+                    |ui| {
+                        ui.checkbox(
+                            &mut self.show_left_sidebar,
+                            "Left Sidebar (Workspaces & Symbols)",
+                        );
+                        ui.checkbox(
+                            &mut self.show_right_sidebar,
+                            "Right Sidebar (Code Editor & Logs)",
+                        );
+                        ui.separator();
+                        let theme_label = if self.is_dark_theme {
+                            "☀ Switch to Light Theme"
+                        } else {
+                            "🌙 Switch to Dark Theme"
+                        };
+                        if ui.button(theme_label).clicked() {
+                            self.is_dark_theme = !self.is_dark_theme;
+                            ui.close();
+                        }
+                    },
+                );
+
+                ui.menu_button(
+                    codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::Tools, loc),
+                    |ui| {
+                        if ui
+                            .button(codercraft_core::i18n::t(
+                                codercraft_core::i18n::I18nKey::StepSwarm,
+                                loc,
+                            ))
+                            .clicked()
+                        {
+                            self.swarm_ledger.step_simulation();
+                            self.status_msg = "Swarm simulation stepped".to_string();
+                            ui.close();
+                        }
+                        if ui
+                            .button(codercraft_core::i18n::t(
+                                codercraft_core::i18n::I18nKey::ProbeFleetPorts,
+                                loc,
+                            ))
+                            .clicked()
+                        {
+                            self.core.fleet_depot.probe_ports();
+                            self.status_msg = "All 12 fleet craft ports probed".to_string();
+                            ui.close();
+                        }
+                        if ui
+                            .button(codercraft_core::i18n::t(
+                                codercraft_core::i18n::I18nKey::ScanInstructions,
+                                loc,
+                            ))
+                            .clicked()
+                        {
+                            let inst = CoderCraftCore::discover_instructions(&self.selected_repo);
+                            let found = [
+                                inst.agents_md.map(|_| "AGENTS.md"),
+                                inst.claude_md.map(|_| "CLAUDE.md"),
+                                inst.cursor_rules.map(|_| ".cursorrules"),
+                            ]
+                            .into_iter()
+                            .flatten()
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                            self.terminal_logs
+                                .push(format!("[instructions] Discovered: {found}"));
+                            ui.close();
+                        }
+                    },
+                );
+
+                ui.menu_button(
+                    codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::Security, loc),
+                    |ui| {
+                        if self.is_authenticated {
+                            ui.label(format!(
+                                "{}: {}",
+                                codercraft_core::i18n::t(
+                                    codercraft_core::i18n::I18nKey::Authenticated,
+                                    loc
+                                ),
+                                self.auth_username
+                            ));
+                            if ui.button("Sign Out").clicked() {
+                                self.is_authenticated = false;
+                                self.status_msg = "Logged out".to_string();
+                                ui.close();
+                            }
+                        } else {
+                            if ui.button("Basic Auth Login...").clicked() {
+                                self.show_auth_modal = true;
+                                ui.close();
                             }
                         }
-                        ui.close();
-                    }
-                    if ui.button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::FleetProjectDepot, loc)).clicked() {
-                        self.current_screen = StudioScreenMode::FleetDepot;
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::Exit, loc)).clicked() {
-                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                });
+                    },
+                );
 
-                ui.menu_button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::Screens, loc), |ui| {
-                    if ui.button(format!("💻 {}", codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::IdeStudio, loc))).clicked() {
-                        self.current_screen = StudioScreenMode::IdeStudio;
-                        ui.close();
-                    }
-                    if ui.button(format!("🚀 {}", codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::FleetDepotScreen, loc))).clicked() {
-                        self.current_screen = StudioScreenMode::FleetDepot;
-                        ui.close();
-                    }
-                    if ui.button(format!("🐝 {}", codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::SwarmSupervisor, loc))).clicked() {
-                        self.current_screen = StudioScreenMode::SwarmSupervisor;
-                        ui.close();
-                    }
-                    if ui.button(format!("🖥️ {}", codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::QuadDisplayConfig, loc))).clicked() {
-                        self.current_screen = StudioScreenMode::QuadDisplayConfig;
-                        ui.close();
-                    }
-                    ui.separator();
-                    let quad_label = if self.enable_quad_viewports {
-                        "✅ Quad Viewports Enabled"
-                    } else {
-                        "⬜ Enable Quad Viewports Across All Displays"
-                    };
-                    if ui.button(quad_label).clicked() {
-                        self.enable_quad_viewports = !self.enable_quad_viewports;
-                        self.status_msg = if self.enable_quad_viewports {
-                            "Quad-display viewports spawned across connected monitors".to_string()
-                        } else {
-                            "Consolidated into primary display".to_string()
-                        };
-                        ui.close();
-                    }
-                });
-
-                ui.menu_button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::AgentMode, loc), |ui| {
-                    if ui.button(format!("🔨 {}", codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::BuildMode, loc))).clicked() {
-                        self.agent_session.set_mode(AgentMode::Build);
-                        self.status_msg = "Agent mode: BUILD (Active code modification enabled)".to_string();
-                        ui.close();
-                    }
-                    if ui.button(format!("📋 {}", codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::PlanMode, loc))).clicked() {
-                        self.agent_session.set_mode(AgentMode::Plan);
-                        self.status_msg = "Agent mode: PLAN (Read-only exploration & roadmap synthesis)".to_string();
-                        ui.close();
-                    }
-                });
-
-                ui.menu_button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::View, loc), |ui| {
-                    ui.checkbox(&mut self.show_left_sidebar, "Left Sidebar (Workspaces & Symbols)");
-                    ui.checkbox(&mut self.show_right_sidebar, "Right Sidebar (Code Editor & Logs)");
-                    ui.separator();
-                    let theme_label = if self.is_dark_theme { "☀ Switch to Light Theme" } else { "🌙 Switch to Dark Theme" };
-                    if ui.button(theme_label).clicked() {
-                        self.is_dark_theme = !self.is_dark_theme;
-                        ui.close();
-                    }
-                });
-
-                ui.menu_button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::Tools, loc), |ui| {
-                    if ui.button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::StepSwarm, loc)).clicked() {
-                        self.swarm_ledger.step_simulation();
-                        self.status_msg = "Swarm simulation stepped".to_string();
-                        ui.close();
-                    }
-                    if ui.button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::ProbeFleetPorts, loc)).clicked() {
-                        self.core.fleet_depot.probe_ports();
-                        self.status_msg = "All 12 fleet craft ports probed".to_string();
-                        ui.close();
-                    }
-                    if ui.button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::ScanInstructions, loc)).clicked() {
-                        let inst = CoderCraftCore::discover_instructions(&self.selected_repo);
-                        let found = [
-                            inst.agents_md.map(|_| "AGENTS.md"),
-                            inst.claude_md.map(|_| "CLAUDE.md"),
-                            inst.cursor_rules.map(|_| ".cursorrules"),
-                        ].into_iter().flatten().collect::<Vec<_>>().join(", ");
-                        self.terminal_logs.push(format!("[instructions] Discovered: {found}"));
-                        ui.close();
-                    }
-                });
-
-                ui.menu_button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::Security, loc), |ui| {
-                    if self.is_authenticated {
-                        ui.label(format!("{}: {}", codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::Authenticated, loc), self.auth_username));
-                        if ui.button("Sign Out").clicked() {
-                            self.is_authenticated = false;
-                            self.status_msg = "Logged out".to_string();
+                ui.menu_button(
+                    codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::Help, loc),
+                    |ui| {
+                        if ui.button("📖 Architecture & Features Manual").clicked() {
+                            self.active_help_tab = 0;
+                            self.show_about_dialog = true;
                             ui.close();
                         }
-                    } else {
-                        if ui.button("Basic Auth Login...").clicked() {
-                            self.show_auth_modal = true;
+                        if ui.button("⚖️ Compare vs Claude, OpenCode & AGY").clicked() {
+                            self.active_help_tab = 1;
+                            self.show_about_dialog = true;
                             ui.close();
                         }
-                    }
-                });
-
-                ui.menu_button(codercraft_core::i18n::t(codercraft_core::i18n::I18nKey::Help, loc), |ui| {
-                    if ui.button("📖 Architecture & Features Manual").clicked() {
-                        self.active_help_tab = 0;
-                        self.show_about_dialog = true;
-                        ui.close();
-                    }
-                    if ui.button("⚖️ Compare vs Claude, OpenCode & AGY").clicked() {
-                        self.active_help_tab = 1;
-                        self.show_about_dialog = true;
-                        ui.close();
-                    }
-                    if ui.button("🐝 Swarm & Stigmergy Guide").clicked() {
-                        self.active_help_tab = 2;
-                        self.show_about_dialog = true;
-                        ui.close();
-                    }
-                    if ui.button("🚀 Fleet Depot & Quad Displays").clicked() {
-                        self.active_help_tab = 3;
-                        self.show_about_dialog = true;
-                        ui.close();
-                    }
-                    if ui.button("⌨️ Shortcuts & MCP Protocol").clicked() {
-                        self.active_help_tab = 4;
-                        self.show_about_dialog = true;
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button("About CoderCraft").clicked() {
-                        self.show_about_dialog = true;
-                        ui.close();
-                    }
-                });
+                        if ui.button("🐝 Swarm & Stigmergy Guide").clicked() {
+                            self.active_help_tab = 2;
+                            self.show_about_dialog = true;
+                            ui.close();
+                        }
+                        if ui.button("🚀 Fleet Depot & Quad Displays").clicked() {
+                            self.active_help_tab = 3;
+                            self.show_about_dialog = true;
+                            ui.close();
+                        }
+                        if ui.button("⌨️ Shortcuts & MCP Protocol").clicked() {
+                            self.active_help_tab = 4;
+                            self.show_about_dialog = true;
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("About CoderCraft").clicked() {
+                            self.show_about_dialog = true;
+                            ui.close();
+                        }
+                    },
+                );
 
                 // Right-aligned quick toggles & badges
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -323,17 +555,26 @@ impl eframe::App for CoderCraftApp {
                         .selected_text(loc_label)
                         .show_ui(ui, |ui| {
                             for loc_item in codercraft_core::i18n::AppLocale::all() {
-                                let text = format!("{} {}", loc_item.flag(), loc_item.display_name());
+                                let text =
+                                    format!("{} {}", loc_item.flag(), loc_item.display_name());
                                 let _ = ui.selectable_value(&mut self.locale, *loc_item, text);
                             }
                         });
 
-                    let theme_icon = if self.is_dark_theme { "🌙 Dark" } else { "☀ Light" };
+                    let theme_icon = if self.is_dark_theme {
+                        "🌙 Dark"
+                    } else {
+                        "☀ Light"
+                    };
                     if ui.button(theme_icon).clicked() {
                         self.is_dark_theme = !self.is_dark_theme;
                     }
 
-                    let auth_badge = if self.is_authenticated { "🔒 Authenticated" } else { "🔓 Guest" };
+                    let auth_badge = if self.is_authenticated {
+                        "🔒 Authenticated"
+                    } else {
+                        "🔓 Guest"
+                    };
                     if ui.button(auth_badge).clicked() {
                         self.show_auth_modal = true;
                     }
@@ -344,16 +585,27 @@ impl eframe::App for CoderCraftApp {
                     } else {
                         "🖥️ Single Display".to_string()
                     };
-                    if ui.button(egui::RichText::new(quad_pill).color(egui::Color32::from_rgb(88, 166, 255))).clicked() {
+                    if ui
+                        .button(
+                            egui::RichText::new(quad_pill)
+                                .color(egui::Color32::from_rgb(88, 166, 255)),
+                        )
+                        .clicked()
+                    {
                         self.current_screen = StudioScreenMode::QuadDisplayConfig;
                     }
 
                     // Token Telemetry Pill with glowing gradient
-                    ui.label(egui::RichText::new(format!(
-                        "⚡ Tokens: {} / {}",
-                        self.agent_session.metrics.prompt_tokens,
-                        self.agent_session.metrics.completion_tokens
-                    )).monospace().color(egui::Color32::from_rgb(188, 140, 255)).size(11.0));
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "⚡ Tokens: {} / {}",
+                            self.agent_session.metrics.prompt_tokens,
+                            self.agent_session.metrics.completion_tokens
+                        ))
+                        .monospace()
+                        .color(egui::Color32::from_rgb(188, 140, 255))
+                        .size(11.0),
+                    );
                 });
             });
         });
@@ -362,16 +614,40 @@ impl eframe::App for CoderCraftApp {
         egui::Panel::top("sub_toolbar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 // Screen Tabs with glowing highlights
-                if ui.selectable_label(self.current_screen == StudioScreenMode::IdeStudio, "💻 IDE Studio").clicked() {
+                if ui
+                    .selectable_label(
+                        self.current_screen == StudioScreenMode::IdeStudio,
+                        "💻 IDE Studio",
+                    )
+                    .clicked()
+                {
                     self.current_screen = StudioScreenMode::IdeStudio;
                 }
-                if ui.selectable_label(self.current_screen == StudioScreenMode::FleetDepot, "🚀 Fleet Depot").clicked() {
+                if ui
+                    .selectable_label(
+                        self.current_screen == StudioScreenMode::FleetDepot,
+                        "🚀 Fleet Depot",
+                    )
+                    .clicked()
+                {
                     self.current_screen = StudioScreenMode::FleetDepot;
                 }
-                if ui.selectable_label(self.current_screen == StudioScreenMode::SwarmSupervisor, "🐝 Swarm Supervisor").clicked() {
+                if ui
+                    .selectable_label(
+                        self.current_screen == StudioScreenMode::SwarmSupervisor,
+                        "🐝 Swarm Supervisor",
+                    )
+                    .clicked()
+                {
                     self.current_screen = StudioScreenMode::SwarmSupervisor;
                 }
-                if ui.selectable_label(self.current_screen == StudioScreenMode::QuadDisplayConfig, "🖥️ Quad Display").clicked() {
+                if ui
+                    .selectable_label(
+                        self.current_screen == StudioScreenMode::QuadDisplayConfig,
+                        "🖥️ Quad Display",
+                    )
+                    .clicked()
+                {
                     self.current_screen = StudioScreenMode::QuadDisplayConfig;
                 }
 
@@ -382,7 +658,10 @@ impl eframe::App for CoderCraftApp {
                     AgentMode::Build => ("🔨 BUILD MODE", egui::Color32::from_rgb(63, 185, 80)),
                     AgentMode::Plan => ("📋 PLAN MODE", egui::Color32::from_rgb(88, 166, 255)),
                 };
-                if ui.button(egui::RichText::new(mode_text).color(mode_color).strong()).clicked() {
+                if ui
+                    .button(egui::RichText::new(mode_text).color(mode_color).strong())
+                    .clicked()
+                {
                     let next = match self.agent_session.mode {
                         AgentMode::Build => AgentMode::Plan,
                         AgentMode::Plan => AgentMode::Build,
@@ -392,11 +671,20 @@ impl eframe::App for CoderCraftApp {
 
                 ui.separator();
                 ui.label(egui::RichText::new("Language:").strong());
-                if ui.selectable_label(self.core.active_language == SupportedLanguage::Rust, "Rust").clicked() {
+                if ui
+                    .selectable_label(self.core.active_language == SupportedLanguage::Rust, "Rust")
+                    .clicked()
+                {
                     self.core.active_language = SupportedLanguage::Rust;
                     self.status_msg = "Language set to Rust (clippy auto-configured)".to_string();
                 }
-                if ui.selectable_label(self.core.active_language == SupportedLanguage::Python, "Python").clicked() {
+                if ui
+                    .selectable_label(
+                        self.core.active_language == SupportedLanguage::Python,
+                        "Python",
+                    )
+                    .clicked()
+                {
                     self.core.active_language = SupportedLanguage::Python;
                     self.status_msg = "Language set to Python (ruff auto-configured)".to_string();
                 }
@@ -419,17 +707,21 @@ impl eframe::App for CoderCraftApp {
                     });
                     ui.horizontal(|ui| {
                         ui.label("Password:");
-                        ui.add(egui::TextEdit::singleline(&mut self.auth_password_input).password(true));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.auth_password_input)
+                                .password(true),
+                        );
                     });
                     ui.separator();
                     ui.horizontal(|ui| {
-                        if ui.button("Login").clicked() {
-                            if !self.auth_username.is_empty() && !self.auth_password_input.is_empty() {
-                                self.is_authenticated = true;
-                                self.status_msg = format!("Authenticated as {}", self.auth_username);
-                                self.show_auth_modal = false;
-                                self.auth_password_input.clear();
-                            }
+                        if ui.button("Login").clicked()
+                            && !self.auth_username.is_empty()
+                            && !self.auth_password_input.is_empty()
+                        {
+                            self.is_authenticated = true;
+                            self.status_msg = format!("Authenticated as {}", self.auth_username);
+                            self.show_auth_modal = false;
+                            self.auth_password_input.clear();
                         }
                         if ui.button("Cancel").clicked() {
                             self.show_auth_modal = false;
@@ -649,65 +941,93 @@ impl CoderCraftApp {
                 ui.add_space(4.0);
 
                 let fleet_repos = [
-                    "codercraft", "djcraft", "modcraft", "databasecraft",
-                    "appcraft", "robotcraft", "moneycraft", "travelcraft", "makercraft"
+                    "codercraft",
+                    "djcraft",
+                    "modcraft",
+                    "databasecraft",
+                    "appcraft",
+                    "robotcraft",
+                    "moneycraft",
+                    "travelcraft",
+                    "makercraft",
                 ];
-                egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
-                    for repo in &fleet_repos {
-                        let repo_path = format!("D:\\Dev\\repos\\{}", repo);
-                        let is_selected = self.selected_repo == repo_path;
-                        if ui.selectable_label(is_selected, format!("📦 {}", repo)).clicked() {
-                            self.selected_repo = repo_path.clone();
-                            self.agent_session.workspace_dir = repo_path;
-                            self.terminal_logs.push(format!("[workspace] Switched to {}", repo));
+                egui::ScrollArea::vertical()
+                    .max_height(120.0)
+                    .show(ui, |ui| {
+                        for repo in &fleet_repos {
+                            let repo_path = format!("D:\\Dev\\repos\\{}", repo);
+                            let is_selected = self.selected_repo == repo_path;
+                            if ui
+                                .selectable_label(is_selected, format!("📦 {}", repo))
+                                .clicked()
+                            {
+                                self.selected_repo = repo_path.clone();
+                                self.agent_session.workspace_dir = repo_path;
+                                self.terminal_logs
+                                    .push(format!("[workspace] Switched to {}", repo));
+                            }
                         }
-                    }
-                });
+                    });
 
                 ui.add_space(6.0);
                 ui.separator();
                 ui.heading("📄 Workspace Files");
-                let tree = CoderCraftCore::scan_tree(std::path::Path::new(&self.selected_repo), 0, 2);
-                egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
-                    for child in tree.children {
-                        if child.is_dir {
-                            ui.label(format!("📁 {}/", child.name));
-                        } else {
-                            let is_open = self.selected_file.as_deref() == Some(&child.path);
-                            if ui.selectable_label(is_open, format!("📄 {}", child.name)).clicked() {
-                                self.selected_file = Some(child.path.clone());
-                                // Open buffer if not already open
-                                if let Ok(content) = std::fs::read_to_string(&child.path) {
-                                    self.active_symbols = CoderCraftCore::extract_ast_symbols(&content, &self.core.active_language);
-                                    let new_buf = OpenBuffer::new(&child.path, content);
-                                    self.open_buffers.push(new_buf);
-                                    self.active_buffer_idx = self.open_buffers.len() - 1;
-                                    self.active_tab = ActiveRightTab::CodeEditor;
+                let tree =
+                    CoderCraftCore::scan_tree(std::path::Path::new(&self.selected_repo), 0, 2);
+                egui::ScrollArea::vertical()
+                    .max_height(180.0)
+                    .show(ui, |ui| {
+                        for child in tree.children {
+                            if child.is_dir {
+                                ui.label(format!("📁 {}/", child.name));
+                            } else {
+                                let is_open = self.selected_file.as_deref() == Some(&child.path);
+                                if ui
+                                    .selectable_label(is_open, format!("📄 {}", child.name))
+                                    .clicked()
+                                {
+                                    self.selected_file = Some(child.path.clone());
+                                    // Open buffer if not already open
+                                    if let Ok(content) = std::fs::read_to_string(&child.path) {
+                                        self.active_symbols = CoderCraftCore::extract_ast_symbols(
+                                            &content,
+                                            &self.core.active_language,
+                                        );
+                                        let new_buf = OpenBuffer::new(&child.path, content);
+                                        self.open_buffers.push(new_buf);
+                                        self.active_buffer_idx = self.open_buffers.len() - 1;
+                                        self.active_tab = ActiveRightTab::CodeEditor;
+                                    }
                                 }
                             }
                         }
-                    }
-                });
+                    });
 
                 ui.separator();
                 ui.heading("🔍 AST Symbols");
                 if self.active_symbols.is_empty() {
                     ui.label("No top-level declarations.");
                 } else {
-                    egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
-                        for sym in &self.active_symbols {
-                            let icon = match sym.kind.as_str() {
-                                "fn" => "⚡",
-                                "struct" => "📦",
-                                "enum" => "🔀",
-                                "trait" => "📜",
-                                _ => "🔹",
-                            };
-                            if ui.button(format!("{icon} {} (L{})", sym.name, sym.line_number)).clicked() {
-                                self.status_msg = format!("Jump to {}:{}", sym.name, sym.line_number);
+                    egui::ScrollArea::vertical()
+                        .max_height(140.0)
+                        .show(ui, |ui| {
+                            for sym in &self.active_symbols {
+                                let icon = match sym.kind.as_str() {
+                                    "fn" => "⚡",
+                                    "struct" => "📦",
+                                    "enum" => "🔀",
+                                    "trait" => "📜",
+                                    _ => "🔹",
+                                };
+                                if ui
+                                    .button(format!("{icon} {} (L{})", sym.name, sym.line_number))
+                                    .clicked()
+                                {
+                                    self.status_msg =
+                                        format!("Jump to {}:{}", sym.name, sym.line_number);
+                                }
                             }
-                        }
-                    });
+                        });
                 }
             });
         }
@@ -846,26 +1166,337 @@ impl CoderCraftApp {
                         }
                     }
                     ActiveRightTab::LlmSettings => {
-                        ui.heading("🧠 LLM Setup & Tokens");
-                        ui.label(format!("Provider: {}", self.core.llm_config.provider));
-                        ui.label(format!("Endpoint: {}", self.core.llm_config.endpoint));
-                        ui.label(format!("Model: {}", self.core.llm_config.model_name));
+                        use codercraft_core::craft_ai_core as ai;
+                        // Worker results land here (non-blocking).
+                        self.llm_poll();
+                        ui.heading("LLM Setup & Tokens");
+                        // Live file truth: reflects CLI/MCP changes too.
+                        let file_cfg = ai::CraftAiConfig::load();
+                        let file_kind =
+                            ai::providers::resolve_provider(&file_cfg.provider);
+                        ui.label(format!(
+                            "Active: {} / {}",
+                            file_cfg.provider, file_cfg.model
+                        ));
+                        if file_kind.is_none() {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(255, 120, 120),
+                                "Unknown provider in config file - pick one below.",
+                            );
+                        }
                         ui.separator();
-                        ui.label("Quick Switch:");
-                        if ui.button("Local: Ollama qwen2.5-coder:32b").clicked() {
-                            self.core.llm_config.provider = "Ollama".to_string();
-                            self.core.llm_config.endpoint = "http://localhost:11434/api/chat".to_string();
-                            self.core.llm_config.model_name = "qwen2.5-coder:32b".to_string();
+
+                        // Provider dropdown: all 8 fleet providers, never auto-pick.
+                        ui.horizontal(|ui| {
+                            ui.label("Provider:");
+                            egui::ComboBox::from_id_salt("llm_provider")
+                                .selected_text(
+                                    ai::providers::resolve_provider(&self.llm_provider_pick)
+                                        .map(ai::providers::provider_label)
+                                        .unwrap_or("(pick one)"),
+                                )
+                                .show_ui(ui, |ui| {
+                                    for id in ai::providers::PROVIDER_IDS {
+                                        let kind = ai::providers::resolve_provider(id);
+                                        let label = kind
+                                            .map(ai::providers::provider_label)
+                                            .unwrap_or(*id);
+                                        ui.selectable_value(
+                                            &mut self.llm_provider_pick,
+                                            (*id).to_string(),
+                                            label,
+                                        );
+                                    }
+                                });
+                        });
+                        // Endpoint: default per provider, editable override.
+                        let picked_kind =
+                            ai::providers::resolve_provider(&self.llm_provider_pick);
+                        let default_ep = picked_kind
+                            .map(|k| ai::providers::default_endpoint(&file_cfg, k))
+                            .unwrap_or_default();
+                        ui.horizontal(|ui| {
+                            ui.label("Endpoint override:");
+                            ui.text_edit_singleline(&mut self.llm_endpoint_edit)
+                                .on_hover_text(format!(
+                                    "Empty = default ({})",
+                                    if default_ep.is_empty() {
+                                        "(none)"
+                                    } else {
+                                        &default_ep
+                                    }
+                                ));
+                        });
+                        let effective_ep = if self.llm_endpoint_edit.trim().is_empty() {
+                            default_ep.clone()
+                        } else {
+                            self.llm_endpoint_edit.trim().to_string()
+                        };
+                        ui.label(format!("Effective endpoint: {effective_ep}"));
+                        // Model: free text + live list, never auto-picks [0].
+                        ui.horizontal(|ui| {
+                            ui.label("Model:");
+                            ui.text_edit_singleline(&mut self.llm_model_edit);
+                            if ui.button("Refresh list").clicked() {
+                                let provider = self.llm_provider_pick.clone();
+                                let endpoint = effective_ep.clone();
+                                self.llm_spawn("listing models", move || {
+                                    let mut cfg =
+                                        ai::CraftAiConfig::load();
+                                    cfg.provider = provider.clone();
+                                    if !endpoint.trim().is_empty() {
+                                        cfg.endpoint_override = endpoint.clone();
+                                    }
+                                    let kind = ai::providers::resolve_provider(&provider);
+                                    match kind {
+                                        None => format!(
+                                            "unknown provider '{provider}'"
+                                        ),
+                                        Some(k) => {
+                                            match ai::providers::list_models(&cfg, k) {
+                                                Ok(models) => format!(
+                                                    "MODEL_CACHE:{}",
+                                                    serde_json::to_string(&models)
+                                                        .unwrap_or_else(|_| "[]".to_string())
+                                                ),
+                                                Err(e) => e.to_string(),
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                        if !self.llm_models_cache.is_empty() {
+                            ui.label(format!(
+                                "Available ({} - click to pick):",
+                                self.llm_models_cache.len()
+                            ));
+                            egui::ScrollArea::vertical()
+                                .max_height(120.0)
+                                .show(ui, |ui| {
+                                    for m in self.llm_models_cache.clone() {
+                                        if ui.selectable_label(false, &m).clicked() {
+                                            self.llm_model_edit = m;
+                                        }
+                                    }
+                                });
                         }
-                        if ui.button("Cloud: Claude 3.5 Sonnet").clicked() {
-                            self.core.llm_config.provider = "Anthropic".to_string();
-                            self.core.llm_config.endpoint = "https://api.anthropic.com/v1/messages".to_string();
-                            self.core.llm_config.model_name = "claude-3-5-sonnet".to_string();
+                        ui.separator();
+                        // API keys: write-only password fields. Non-empty entries
+                        // are saved; presence is shown as set/unset dots only.
+                        ui.label("API keys (leave empty to keep stored value):");
+                        let dots = |present: bool| {
+                            if present {
+                                "set"
+                            } else {
+                                "not set"
+                            }
+                        };
+                        let presents = |slot: &str| -> bool {
+                            match slot {
+                                "openai" => !file_cfg.openai_api_key.trim().is_empty(),
+                                "anthropic" => {
+                                    !file_cfg.anthropic_api_key.trim().is_empty()
+                                }
+                                "deepseek" => {
+                                    !file_cfg.deepseek_api_key.trim().is_empty()
+                                }
+                                "meta" => !file_cfg.meta_api_key.trim().is_empty(),
+                                "openrouter" => {
+                                    !file_cfg.openrouter_api_key.trim().is_empty()
+                                }
+                                _ => !file_cfg.custom_api_key.trim().is_empty(),
+                            }
+                        };
+                        for (slot, field) in [
+                            ("openai", &mut self.llm_key_openai),
+                            ("anthropic", &mut self.llm_key_anthropic),
+                            ("deepseek", &mut self.llm_key_deepseek),
+                            ("meta", &mut self.llm_key_meta),
+                            ("openrouter", &mut self.llm_key_openrouter),
+                            ("custom", &mut self.llm_key_custom),
+                        ] {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{slot} [{}]:", dots(presents(slot))));
+                                ui.add(
+                                    egui::TextEdit::singleline(field).password(true),
+                                );
+                            });
                         }
-                        if ui.button("Cloud: DeepSeek Coder V3").clicked() {
-                            self.core.llm_config.provider = "DeepSeek".to_string();
-                            self.core.llm_config.endpoint = "https://api.deepseek.com/chat/completions".to_string();
-                            self.core.llm_config.model_name = "deepseek-coder".to_string();
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button("Save selection")
+                                .on_hover_text(
+                                    "Persists provider/model/endpoint/keys, then switches VRAM (Ollama evicts others and warms the pick).",
+                                )
+                                .clicked()
+                            {
+                                let provider = self.llm_provider_pick.clone();
+                                let model = self.llm_model_edit.clone();
+                                let endpoint = self.llm_endpoint_edit.clone();
+                                let keys = [
+                                    self.llm_key_openai.clone(),
+                                    self.llm_key_anthropic.clone(),
+                                    self.llm_key_deepseek.clone(),
+                                    self.llm_key_meta.clone(),
+                                    self.llm_key_openrouter.clone(),
+                                    self.llm_key_custom.clone(),
+                                ];
+                                self.llm_spawn("saving", move || {
+                                    use codercraft_core::craft_ai_core as ai2;
+                                    let mut cfg = ai2::CraftAiConfig::load();
+                                    if ai2::providers::resolve_provider(&provider).is_none() {
+                                        return format!("unknown provider '{provider}'");
+                                    }
+                                    if model.trim().is_empty() {
+                                        return "empty model: nothing selected, nothing saved".to_string();
+                                    }
+                                    cfg.provider = provider.clone();
+                                    cfg.model = model.clone();
+                                    cfg.endpoint_override = endpoint.trim().to_string();
+                                    let slots = [
+                                        ("openai", &keys[0]),
+                                        ("anthropic", &keys[1]),
+                                        ("deepseek", &keys[2]),
+                                        ("meta", &keys[3]),
+                                        ("openrouter", &keys[4]),
+                                        ("custom", &keys[5]),
+                                    ];
+                                    for (slot, value) in slots {
+                                        if value.trim().is_empty() {
+                                            continue;
+                                        }
+                                        let kind = ai2::providers::resolve_provider(slot);
+                                        match kind {
+                                            Some(k) => {
+                                                let dest = match k {
+                                                    ai2::ProviderKind::OpenAi => &mut cfg.openai_api_key,
+                                                    ai2::ProviderKind::Anthropic => &mut cfg.anthropic_api_key,
+                                                    ai2::ProviderKind::DeepSeek => &mut cfg.deepseek_api_key,
+                                                    ai2::ProviderKind::Meta => &mut cfg.meta_api_key,
+                                                    ai2::ProviderKind::OpenRouter => &mut cfg.openrouter_api_key,
+                                                    ai2::ProviderKind::Custom => &mut cfg.custom_api_key,
+                                                    ai2::ProviderKind::Ollama | ai2::ProviderKind::LMStudio => continue,
+                                                };
+                                                *dest = value.trim().to_string();
+                                            }
+                                            None => continue,
+                                        }
+                                    }
+                                    if let Err(e) = cfg.save() {
+                                        return format!("save failed: {e}");
+                                    }
+                                    let kind = ai2::providers::resolve_provider(&provider);
+                                    if kind == Some(ai2::ProviderKind::Ollama) {
+                                        let rep = ai2::providers::switch_ollama_model(
+                                            &cfg, &model,
+                                        );
+                                        format!(
+                                            "saved {provider}/{model}; evicted {} / warmed={}",
+                                            rep.evicted.join(", "),
+                                            rep.warmed
+                                        )
+                                    } else {
+                                        format!("saved {provider}/{model}")
+                                    }
+                                });
+                                // Secrets leave memory immediately after dispatch.
+                                self.llm_key_openai.clear();
+                                self.llm_key_anthropic.clear();
+                                self.llm_key_deepseek.clear();
+                                self.llm_key_meta.clear();
+                                self.llm_key_openrouter.clear();
+                                self.llm_key_custom.clear();
+                            }
+                            if ui.button("Test brain").clicked() {
+                                self.llm_spawn("probing brain", move || {
+                                    use codercraft_core::craft_ai_core as ai3;
+                                    let cfg = ai3::CraftAiConfig::load();
+                                    let client = ai3::CraftAiClient::with_config(cfg);
+                                    let rt = tokio::runtime::Builder::new_current_thread()
+                                        .enable_all()
+                                        .build();
+                                    match rt {
+                                        Ok(rt) => {
+                                            let reply = rt.block_on(async {
+                                                tokio::time::timeout(
+                                                    std::time::Duration::from_secs(60),
+                                                    client.complete(
+                                                        "You are a connectivity probe. Reply briefly.",
+                                                        "Reply with exactly: OK",
+                                                    ),
+                                                )
+                                                .await
+                                            });
+                                            match reply {
+                                                Ok(Ok(text)) => {
+                                                    let short: String =
+                                                        text.chars().take(200).collect();
+                                                    format!("ok: {short}")
+                                                }
+                                                Ok(Err(e)) => format!("probe error: {e}"),
+                                                Err(_) => {
+                                                    "probe timed out after 60s".to_string()
+                                                }
+                                            }
+                                        }
+                                        Err(e) => format!("probe error: {e}"),
+                                    }
+                                });
+                            }
+                            if ui.button("Refresh telemetry").clicked() {
+                                self.llm_spawn("reading telemetry", move || {
+                                    use codercraft_core::craft_ai_core as ai4;
+                                    let cfg = ai4::CraftAiConfig::load();
+                                    let residents =
+                                        ai4::providers::ollama_residents(&cfg);
+                                    let vram = ai4::providers::gpu_vram();
+                                    let vram_txt = match vram {
+                                        Some((used, total)) => format!(
+                                            "VRAM {used}/{total} MiB"
+                                        ),
+                                        None => "VRAM n/a (no nvidia-smi)".to_string(),
+                                    };
+                                    let res_txt = if residents.is_empty() {
+                                        "no Ollama residents".to_string()
+                                    } else {
+                                        residents
+                                            .iter()
+                                            .map(|r| {
+                                                format!("{} ({} MB)", r.name, r.size_vram_mb)
+                                            })
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    };
+                                    format!("VRAMLINE:{vram_txt}; residents: {res_txt}")
+                                });
+                            }
+                            if ui.button("Evict all models").clicked() {
+                                self.llm_spawn("evicting", move || {
+                                    use codercraft_core::craft_ai_core as ai5;
+                                    let cfg = ai5::CraftAiConfig::load();
+                                    let rep =
+                                        ai5::providers::switch_ollama_model(&cfg, "");
+                                    format!(
+                                        "evicted: {}",
+                                        if rep.evicted.is_empty() {
+                                            "(none loaded)".to_string()
+                                        } else {
+                                            rep.evicted.join(", ")
+                                        }
+                                    )
+                                });
+                            }
+                        });
+                        if !self.llm_vram_line.is_empty() {
+                            ui.label(format!("Telemetry: {}", self.llm_vram_line));
+                        }
+                        if self.llm_job_running {
+                            ui.spinner();
+                        }
+                        if !self.llm_status_line.is_empty() {
+                            ui.label(format!("Status: {}", self.llm_status_line));
                         }
                     }
                 }
@@ -1137,12 +1768,20 @@ impl CoderCraftApp {
                     }
                 });
             });
-            ui.label("Distributes CoderCraft workstations across up to 4 physical or virtual displays.");
+            ui.label(
+                "Distributes CoderCraft workstations across up to 4 physical or virtual displays.",
+            );
             ui.separator();
 
             ui.horizontal(|ui| {
-                ui.label(format!("Detected Displays: {}", self.detected_display_count));
-                ui.checkbox(&mut self.enable_quad_viewports, "Spawn Dedicated Viewports for Displays 2, 3, and 4");
+                ui.label(format!(
+                    "Detected Displays: {}",
+                    self.detected_display_count
+                ));
+                ui.checkbox(
+                    &mut self.enable_quad_viewports,
+                    "Spawn Dedicated Viewports for Displays 2, 3, and 4",
+                );
             });
 
             ui.add_space(8.0);

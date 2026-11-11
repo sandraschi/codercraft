@@ -16,14 +16,11 @@ with a stigmergic 5-agent supervisor swarm and a fleet depot (12 craft apps,
 live TCP probe) in one native Rust binary (~35 MB RAM, <30 ms startup).
 
 ## Tier mapping
-
-- Tier 1: workspace + deny gates + `Command::dispatch` + deterministic edit
-  concept + L3 parity test + release size note.
-- Tier 2: live linter/test runners (Clippy, Ruff, Biome) streaming in the
-  terminal display; `craft-ai-core` token telemetry (Ollama local, cloud
-  optional).
-- Tier 4: quad-display studio, `egui_kittest` goldens, current-user NSIS
-  installer, cold-boot table in README.
+See [`TIERED_PLAN.md`](TIERED_PLAN.md) for full execution breakdown:
+- Tier 1: workspace + deny gates + `Command::dispatch` + deterministic edit concept + L3 parity test + release size note.
+- Tier 2: live linter/test runners (Clippy, Ruff, Biome) streaming in the terminal display; `craft-ai-core` token telemetry (Ollama local, cloud optional).
+- Tier 3: desktop quad-display studio (`codercraft-app`), multi-buffer editor, agent swarm blackboard.
+- Tier 4: Craft Menu Bar Standard (`File`, `Edit`, `View`, `Insert`, `Modify`, `Commands`, `Window`, `Help`) with `switch_on_hover`, mandatory 5-dialog Help suite, View toggles, Tofu Guard glyph scans, `egui_kittest` goldens, current-user NSIS installer, cold-boot table in README.
 
 ## Non-goals (from README)
 

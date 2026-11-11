@@ -79,6 +79,23 @@ Each project card provides one-click `[🚀 Start App]`, `[📂 Open in IDE]`, a
 - **Bézier Node Graph Spaghetti Canvas**: ComfyUI / MaterialCraft style node canvas connecting worker agents to environmental tasks with cubic Bézier curves and animated pulse dots.
 - **Multi-Buffer Code Studio**: Tabbed source file editing, AST symbol outline drawer, character/line telemetry, and one-click disk persistence.
 
+### 3.5 UI/UX Architecture & Menu Bar Standard
+In accordance with [`CRAFT_MENU_BAR_STANDARD.md`](../mcp-central-docs/standards/rust-artcraft/CRAFT_MENU_BAR_STANDARD.md):
+- **Pattern 2 (Viewport-Centric Craft Workstation):** Persistent code/plan buffer viewport with surrounding toolbars and status HUD. Top quick button row acts as accelerators into the `View` menu. To add a new IDE tool, inspector, or display view:
+  1. Register a visibility toggle in the `View` or `Window` menu.
+  2. Add an entry in the sidebar Toolbox / Outline drawer.
+  3. Wire the action directly into the universal `Command::dispatch` bus.
+- **Top Menu Bar Hierarchy:**
+  - `File`: New File (`Ctrl+N`), Open Workspace / File (`Ctrl+O`), Open Recent ▸, Save (`Ctrl+S`), Save As... (`Ctrl+Shift+S`), Close Buffer (`Ctrl+W`), Quit (`Ctrl+Q`).
+  - `Edit`: Undo (`Ctrl+Z`), Redo (`Ctrl+Y`), Cut (`Ctrl+X`), Copy (`Ctrl+C`), Paste (`Ctrl+V`), Select All (`Ctrl+A`), Find / Replace (`Ctrl+F`), Preferences (`Ctrl+,`).
+  - `View`: Toggle File Tree, Toggle Terminal / Diagnostics, Toggle Swarm Supervisor, Toggle Fleet Depot, Zoom In/Out, Theme (`Dark`/`Light`).
+  - `Insert`: Insert Code Snippet, Add Agent Task, Add Stigmergy Card, Generate Blueprint.
+  - `Modify`: Format Buffer (`Shift+Alt+F`), Refactor Symbol, Apply AST Diff Patch, Toggle Plan/Build Mode.
+  - `Commands`: Run Build, Run Tests, Run Clippy / Linter, Launch Stigmergic Swarm, Probe Fleet Depot.
+  - `Window`: Quad-Display Layouts (Single, Dual, Quad), Reset Layout, Focus Next Display.
+  - `Help` (Mandatory 5-Dialog Suite): `Command Palette...` (`Ctrl+Shift+P` / `Ctrl+K`), `Keyboard Shortcuts...` (`F1`), `Project Files & Docs...`, `Licenses & Notices...`, `About CoderCraft`.
+- **Behavioral Mechanics:** `switch_on_hover` between top-level menus, zero-unsafe immediate-mode rendering, and headless `--smoke` parity.
+
 
 ---
 

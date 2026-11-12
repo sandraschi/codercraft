@@ -20,7 +20,270 @@ pub mod autonomy;
 pub mod i18n;
 pub mod patch;
 pub mod permissions;
+pub mod pomerado;
 pub mod sessions;
+
+/// Minimal MCP 2024-11-05 stdio *client*: spawn any MCP server, run the
+/// initialize handshake, then `tools/list` / `tools/call` in one shot.
+///
+/// Design notes:
+/// - One-shot per call (spawn -> handshake -> request -> kill). No long-lived
+///   child management, so the GUI/CLI can never leak a server process.
+/// - Newline-delimited JSON-RPC, matching what `codercraft-cli --mcp` serves.
+/// - All timeouts bounded; every failure is a `String`, never a panic.
+pub mod mcp_client {
+    use super::McpServerEntry;
+    use serde_json::{json, Value};
+    use std::path::PathBuf;
+    use std::time::Duration;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    fn servers_file() -> PathBuf {
+        let base = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("."));
+        base.join(".craft").join("codercraft_mcp_servers.json")
+    }
+
+    fn default_servers() -> Vec<McpServerEntry> {
+        vec![
+            McpServerEntry {
+                name: "databasecraft".to_string(),
+                command: "D:\\Dev\\repos\\databasecraft\\target\\debug\\databasecraft-cli.exe"
+                    .to_string(),
+                args: vec!["mcp".to_string()],
+                env: std::collections::HashMap::new(),
+                is_enabled: true,
+            },
+            McpServerEntry {
+                name: "djcraft".to_string(),
+                command: "D:\\Dev\\repos\\djcraft\\target\\debug\\djcraft-mcp.exe".to_string(),
+                args: vec![],
+                env: std::collections::HashMap::new(),
+                is_enabled: true,
+            },
+            McpServerEntry {
+                name: "gamecraft".to_string(),
+                command: "D:\\Dev\\repos\\gamecraft\\target\\debug\\gamecraft-mcp.exe"
+                    .to_string(),
+                args: vec![],
+                env: std::collections::HashMap::new(),
+                is_enabled: true,
+            },
+        ]
+    }
+
+    /// Load persisted registry; falls back to built-in defaults when the
+    /// file is missing or corrupt (never an error to the caller).
+    #[must_use]
+    pub fn load_servers() -> Vec<McpServerEntry> {
+        let path = servers_file();
+        match std::fs::read_to_string(&path) {
+            Ok(text) => match serde_json::from_str::<Vec<McpServerEntry>>(&text) {
+                Ok(list) => list,
+                Err(_) => default_servers(),
+            },
+            Err(_) => default_servers(),
+        }
+    }
+
+    pub fn save_servers(servers: &[McpServerEntry]) -> Result<(), String> {
+        let path = servers_file();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("cannot create {}: {e}", parent.to_string_lossy()))?;
+        }
+        let text = serde_json::to_string_pretty(servers)
+            .map_err(|e| format!("cannot encode registry: {e}"))?;
+        std::fs::write(&path, text)
+            .map_err(|e| format!("cannot write {}: {e}", path.to_string_lossy()))?;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn find_server(name: &str) -> Option<McpServerEntry> {
+        load_servers()
+            .into_iter()
+            .find(|s| s.name.eq_ignore_ascii_case(name))
+    }
+
+    async fn read_line_timeout(
+        reader: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+        timeout: Duration,
+    ) -> Result<String, String> {
+        tokio::time::timeout(timeout, reader.next_line())
+            .await
+            .map_err(|_| "timed out waiting for MCP server reply".to_string())?
+            .map_err(|e| format!("failed reading MCP server stdout: {e}"))?
+            .ok_or_else(|| "MCP server closed stdout (EOF)".to_string())
+    }
+
+    struct Session {
+        child: tokio::process::Child,
+        stdin: tokio::process::ChildStdin,
+        lines: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+        next_id: i64,
+    }
+
+    impl Session {
+        async fn connect(entry: &McpServerEntry, timeout: Duration) -> Result<Self, String> {
+            if !entry.is_enabled {
+                return Err(format!("server '{}' is disabled", entry.name));
+            }
+            if entry.command.trim().is_empty() {
+                return Err(format!("server '{}' has an empty command", entry.name));
+            }
+            let mut cmd = tokio::process::Command::new(&entry.command);
+            cmd.args(&entry.args);
+            for (k, v) in &entry.env {
+                cmd.env(k, v);
+            }
+            cmd.stdin(std::process::Stdio::piped());
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::null());
+            cmd.kill_on_drop(true);
+            let mut child = cmd
+                .spawn()
+                .map_err(|e| format!("cannot spawn '{}': {e}", entry.command))?;
+            let stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| "server stdin unavailable".to_string())?;
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| "server stdout unavailable".to_string())?;
+            let mut session = Self {
+                child,
+                stdin,
+                lines: BufReader::new(stdout).lines(),
+                next_id: 1,
+            };
+            // initialize handshake
+            let init = json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": { "name": "codercraft", "version": super::APP_VERSION }
+                }
+            });
+            session.next_id = 2;
+            session.send(&init).await?;
+            let reply = session.recv(timeout).await?;
+            if reply.get("error").is_some() {
+                return Err(format!(
+                    "initialize rejected by '{}': {reply}",
+                    entry.name
+                ));
+            }
+            // notifications/initialized (no id, no reply expected)
+            let notif = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+            session.send(&notif).await?;
+            Ok(session)
+        }
+
+        async fn send(&mut self, value: &Value) -> Result<(), String> {
+            let mut text = serde_json::to_string(value)
+                .map_err(|e| format!("cannot encode request: {e}"))?;
+            text.push('\n');
+            self.stdin
+                .write_all(text.as_bytes())
+                .await
+                .map_err(|e| format!("failed writing to MCP server: {e}"))?;
+            self.stdin
+                .flush()
+                .await
+                .map_err(|e| format!("failed flushing MCP server stdin: {e}"))?;
+            Ok(())
+        }
+
+        async fn recv(&mut self, timeout: Duration) -> Result<Value, String> {
+            let line = read_line_timeout(&mut self.lines, timeout).await?;
+            serde_json::from_str::<Value>(&line)
+                .map_err(|e| format!("invalid JSON from MCP server: {e}"))
+        }
+
+        async fn request(
+            &mut self,
+            method: &str,
+            params: Value,
+            timeout: Duration,
+        ) -> Result<Value, String> {
+            let id = self.next_id;
+            self.next_id += 1;
+            self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
+                .await?;
+            // Skip stray lines (progress notifications, or servers that
+            // incorrectly reply to notifications) until the matching id.
+            let deadline = std::time::Instant::now() + timeout;
+            for _ in 0..100 {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    return Err(format!("timed out waiting for '{method}' reply"));
+                }
+                let line = read_line_timeout(&mut self.lines, remaining).await?;
+                let reply: Value = serde_json::from_str::<Value>(&line)
+                    .map_err(|e| format!("invalid JSON from MCP server: {e}"))?;
+                let matches = reply
+                    .get("id")
+                    .and_then(|v| v.as_i64())
+                    .is_some_and(|got| got == id);
+                if !matches {
+                    continue;
+                }
+                if let Some(err) = reply.get("error") {
+                    return Err(format!("MCP error from '{method}': {err}"));
+                }
+                return reply
+                    .get("result")
+                    .cloned()
+                    .ok_or_else(|| format!("MCP '{method}' reply had no result: {reply}"));
+            }
+            Err(format!("too many stray lines waiting for '{method}' reply"))
+        }
+
+        async fn shutdown(mut self) {
+            let _ = self.child.kill().await;
+        }
+    }
+
+    /// Spawn `entry`, handshake, return its `tools/list` result.
+    pub async fn list_tools_live(entry: &McpServerEntry) -> Result<Value, String> {
+        let timeout = Duration::from_secs(12);
+        let mut session = Session::connect(entry, timeout).await?;
+        let result = session
+            .request("tools/list", json!({}), timeout)
+            .await;
+        session.shutdown().await;
+        result
+    }
+
+    /// Spawn `entry`, handshake, run one `tools/call`, return its `result`.
+    pub async fn call_tool_live(
+        entry: &McpServerEntry,
+        tool: &str,
+        arguments: Value,
+    ) -> Result<Value, String> {
+        if tool.trim().is_empty() {
+            return Err("empty tool name".to_string());
+        }
+        let timeout = Duration::from_secs(60);
+        let mut session = Session::connect(entry, Duration::from_secs(12)).await?;
+        let result = session
+            .request(
+                "tools/call",
+                json!({"name": tool, "arguments": arguments}),
+                timeout,
+            )
+            .await;
+        session.shutdown().await;
+        result
+    }
+}
 
 use codercraft_agent::{AgentEngine, AgentMode, AgentSession, SwarmLedger};
 use databasecraft_store::DatabaseStore;
@@ -441,6 +704,17 @@ pub enum Command {
         tool: String,
         target: String,
     },
+    McpListTools {
+        server: String,
+    },
+    McpCallTool {
+        server: String,
+        tool: String,
+        args_json: Option<serde_json::Value>,
+    },
+    McpRemoveServer {
+        name: String,
+    },
     SessionCreate {
         session_id: Option<String>,
         workspace_dir: String,
@@ -480,6 +754,37 @@ pub enum Command {
         mode: Option<String>,
         timeout_s: Option<u64>,
     },
+    PomeradoStatus {
+        root: String,
+        node_version_output: Option<String>,
+    },
+    PomeradoMint {
+        name: String,
+        url: String,
+        task: String,
+        authority: String,
+        root: String,
+        example_input: Option<serde_json::Value>,
+        authentication_origins: Option<Vec<String>>,
+    },
+    PomeradoJob {
+        job_id: String,
+    },
+    PomeradoProvideInput {
+        job_id: String,
+        input: serde_json::Value,
+    },
+    PomeradoCancel {
+        job_id: String,
+    },
+    PomeradoList {
+        root: String,
+    },
+    PomeradoRegister {
+        root: String,
+        name: String,
+        mcp_json_text: Option<String>,
+    },
 }
 
 pub struct CoderCraftCore {
@@ -501,31 +806,7 @@ impl CoderCraftCore {
     pub fn new() -> Self {
         Self {
             active_language: SupportedLanguage::Rust,
-            mcp_servers: vec![
-                McpServerEntry {
-                    name: "databasecraft".to_string(),
-                    command: "D:\\Dev\\repos\\databasecraft\\target\\debug\\databasecraft-mcp.exe"
-                        .to_string(),
-                    args: vec![],
-                    env: HashMap::new(),
-                    is_enabled: true,
-                },
-                McpServerEntry {
-                    name: "djcraft".to_string(),
-                    command: "D:\\Dev\\repos\\djcraft\\target\\debug\\djcraft-mcp.exe".to_string(),
-                    args: vec![],
-                    env: HashMap::new(),
-                    is_enabled: true,
-                },
-                McpServerEntry {
-                    name: "gamecraft".to_string(),
-                    command: "D:\\Dev\\repos\\gamecraft\\target\\debug\\gamecraft-mcp.exe"
-                        .to_string(),
-                    args: vec![],
-                    env: HashMap::new(),
-                    is_enabled: true,
-                },
-            ],
+            mcp_servers: mcp_client::load_servers(),
             llm_config: CraftAiConfig::load(),
             fleet_depot: FleetDepot::new(),
             swarm_ledger: SwarmLedger::new(),
@@ -1076,17 +1357,222 @@ pub async fn dispatch(cmd: Command, store: &DatabaseStore) -> Value {
             })
         }
         Command::ConfigureMcpServer { entry } => {
-            core.mcp_servers.push(entry);
-            json!({
-                "success": true,
-                "total_servers": core.mcp_servers.len()
-            })
+            let mut servers = mcp_client::load_servers();
+            if let Some(slot) = servers
+                .iter_mut()
+                .find(|s| s.name.eq_ignore_ascii_case(&entry.name))
+            {
+                *slot = entry.clone();
+            } else {
+                servers.push(entry.clone());
+            }
+            match mcp_client::save_servers(&servers) {
+                Ok(()) => {
+                    core.mcp_servers = servers.clone();
+                    json!({
+                        "success": true,
+                        "server": entry,
+                        "total_servers": servers.len()
+                    })
+                }
+                Err(e) => json!({ "success": false, "error": e }),
+            }
         }
         Command::ListMcpServers => {
+            let servers = mcp_client::load_servers();
+            core.mcp_servers = servers.clone();
             json!({
                 "success": true,
-                "servers": core.mcp_servers
+                "servers": servers
             })
+        }
+        Command::McpRemoveServer { name } => {
+            let mut servers = mcp_client::load_servers();
+            let before = servers.len();
+            servers.retain(|s| !s.name.eq_ignore_ascii_case(&name));
+            if servers.len() == before {
+                json!({ "success": false, "error": format!("unknown server '{name}'") })
+            } else {
+                match mcp_client::save_servers(&servers) {
+                    Ok(()) => {
+                        core.mcp_servers = servers.clone();
+                        json!({ "success": true, "removed": name, "total_servers": servers.len() })
+                    }
+                    Err(e) => json!({ "success": false, "error": e }),
+                }
+            }
+        }
+        Command::McpListTools { server } => {
+            match mcp_client::find_server(&server) {
+                Some(entry) => match mcp_client::list_tools_live(&entry).await {
+                    Ok(result) => json!({ "success": true, "server": entry.name, "result": result }),
+                    Err(e) => json!({ "success": false, "server": entry.name, "error": e }),
+                },
+                None => json!({ "success": false, "error": format!("unknown server '{server}'") }),
+            }
+        }
+        Command::McpCallTool {
+            server,
+            tool,
+            args_json,
+        } => {
+            match mcp_client::find_server(&server) {
+                Some(entry) => {
+                    let args = args_json.unwrap_or(json!({}));
+                    match mcp_client::call_tool_live(&entry, &tool, args).await {
+                        Ok(result) => json!({ "success": true, "server": entry.name, "tool": tool, "result": result }),
+                        Err(e) => json!({ "success": false, "server": entry.name, "tool": tool, "error": e }),
+                    }
+                }
+                None => json!({ "success": false, "error": format!("unknown server '{server}'") }),
+            }
+        }
+        Command::PomeradoStatus {
+            root,
+            node_version_output,
+        } => {
+            let key_present = std::env::var("OPENAI_API_KEY")
+                .map(|v| !v.trim().is_empty())
+                .unwrap_or(false);
+            let probe =
+                pomerado::probe_environment(node_version_output.as_deref(), key_present, &root);
+            json!({ "success": true, "probe": probe })
+        }
+        Command::PomeradoMint {
+            name,
+            url,
+            task,
+            authority,
+            root,
+            example_input,
+            authentication_origins,
+        } => {
+            let auth = pomerado::PomeradoAuthority::parse_authority(&authority)
+                .unwrap_or(pomerado::PomeradoAuthority::Read);
+            let req = pomerado::PomeradoMintRequest {
+                name: name.clone(),
+                url: url.clone(),
+                task: task.clone(),
+                authority: auth,
+                root: root.clone(),
+                example_input: example_input.clone(),
+                authentication_origins: authentication_origins.unwrap_or_default(),
+            };
+            match pomerado::validate_mint(&req) {
+                Err(e) => json!({ "success": false, "error": e }),
+                Ok(()) => {
+                    let cmd_line = pomerado::mint_command(&req);
+                    // Write authority mutates the target site: default to ask.
+                    let tool = if auth == pomerado::PomeradoAuthority::Write {
+                        "pomerado-write"
+                    } else {
+                        "shell"
+                    };
+                    let v = permissions::check_tool(tool, &cmd_line);
+                    json!({
+                        "success": v.decision != "deny",
+                        "command_line": cmd_line,
+                        "authority": auth.as_str(),
+                        "integration_dir": pomerado::integration_dir(&root, &name).to_string_lossy().to_string(),
+                        "permission": v.decision,
+                        "permission_reason": v.reason,
+                        "note": "run via codercraft_shell; poll with PomeradoJob; answer with PomeradoProvideInput"
+                    })
+                }
+            }
+        }
+        Command::PomeradoJob { job_id } => {
+            if job_id.trim().is_empty() {
+                json!({ "success": false, "error": "empty job_id" })
+            } else {
+                json!({
+                    "success": true,
+                    "command_line": pomerado::get_job_command(&job_id),
+                    "job_id": job_id
+                })
+            }
+        }
+        Command::PomeradoProvideInput { job_id, input } => {
+            if job_id.trim().is_empty() {
+                json!({ "success": false, "error": "empty job_id" })
+            } else {
+                json!({
+                    "success": true,
+                    "command_line": pomerado::provide_input_command(&job_id, &input),
+                    "job_id": job_id
+                })
+            }
+        }
+        Command::PomeradoCancel { job_id } => {
+            if job_id.trim().is_empty() {
+                json!({ "success": false, "error": "empty job_id" })
+            } else {
+                json!({
+                    "success": true,
+                    "command_line": pomerado::cancel_job_command(&job_id),
+                    "job_id": job_id
+                })
+            }
+        }
+        Command::PomeradoList { root } => {
+            let base = std::path::Path::new(&root);
+            if !base.is_absolute() {
+                json!({ "success": false, "error": "root must be absolute" })
+            } else {
+                let mut names: Vec<String> = Vec::new();
+                if let Ok(rd) = std::fs::read_dir(base) {
+                    for e in rd.flatten() {
+                        let p = e.path();
+                        if p.is_dir() && p.join("pomerado.json").exists() {
+                            if let Some(n) = p.file_name().and_then(|s| s.to_str()) {
+                                names.push(n.to_string());
+                            }
+                        }
+                    }
+                }
+                names.sort();
+                json!({ "success": true, "root": root, "integrations": names })
+            }
+        }
+        Command::PomeradoRegister {
+            root,
+            name,
+            mcp_json_text,
+        } => {
+            let req = pomerado::PomeradoMintRequest {
+                name: name.clone(),
+                url: "https://example.com".to_string(),
+                task: "register".to_string(),
+                authority: pomerado::PomeradoAuthority::Read,
+                root: root.clone(),
+                example_input: None,
+                authentication_origins: vec![],
+            };
+            // Reuse name+root validation only (url/task are placeholders here).
+            if !pomerado::is_valid_integration_name(&req.name) {
+                json!({ "success": false, "error": "invalid name" })
+            } else if !std::path::Path::new(&req.root).is_absolute() {
+                json!({ "success": false, "error": "root must be absolute" })
+            } else {
+                let entry =
+                    pomerado::integration_to_server_entry(&root, &name, mcp_json_text.as_deref());
+                let mut servers = mcp_client::load_servers();
+                if let Some(slot) = servers
+                    .iter_mut()
+                    .find(|s| s.name.eq_ignore_ascii_case(&entry.name))
+                {
+                    *slot = entry.clone();
+                } else {
+                    servers.push(entry.clone());
+                }
+                match mcp_client::save_servers(&servers) {
+                    Ok(()) => {
+                        core.mcp_servers = servers.clone();
+                        json!({ "success": true, "server": entry, "total_servers": servers.len() })
+                    }
+                    Err(e) => json!({ "success": false, "error": e }),
+                }
+            }
         }
         Command::ExecuteConsoleCommand {
             command_line,

@@ -1,6 +1,7 @@
 //! CoderCraft MCP Server & Universal CLI.
 //!
 //! Follows the MCP 2024-11-05 standard: stdout is 100% JSON-RPC, diagnostics go to stderr.
+#![recursion_limit = "256"]
 #![deny(clippy::unwrap_used)]
 #![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
@@ -160,6 +161,26 @@ enum Commands {
         model: Option<String>,
         #[arg(long)]
         key: Option<String>,
+    },
+    /// Register (or replace) an external MCP stdio server CoderCraft can call.
+    McpAdd {
+        name: String,
+        command: String,
+        #[arg(long, default_value = "")]
+        args: String,
+    },
+    /// Remove an external MCP stdio server from the registry.
+    McpRemove { name: String },
+    /// List registered external MCP stdio servers.
+    McpList,
+    /// Spawn an external MCP stdio server and return its tools/list.
+    McpTools { server: String },
+    /// Spawn an external MCP stdio server and run one tools/call.
+    McpCall {
+        server: String,
+        tool: String,
+        #[arg(long, default_value = "{}")]
+        args_json: String,
     },
 }
 
@@ -498,6 +519,55 @@ fn main() {
             };
             println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
         }
+        Some(Commands::McpAdd { name, command, args }) => {
+            let arg_list: Vec<String> = if args.trim().is_empty() {
+                vec![]
+            } else {
+                args.split_whitespace().map(|s| s.to_string()).collect()
+            };
+            let res = rt.block_on(dispatch(
+                Command::ConfigureMcpServer {
+                    entry: codercraft_core::McpServerEntry {
+                        name,
+                        command,
+                        args: arg_list,
+                        env: std::collections::HashMap::new(),
+                        is_enabled: true,
+                    },
+                },
+                &store,
+            ));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::McpRemove { name }) => {
+            let res = rt.block_on(dispatch(Command::McpRemoveServer { name }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::McpList) => {
+            let res = rt.block_on(dispatch(Command::ListMcpServers, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::McpTools { server }) => {
+            let res = rt.block_on(dispatch(Command::McpListTools { server }, &store));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
+        Some(Commands::McpCall {
+            server,
+            tool,
+            args_json,
+        }) => {
+            let parsed: serde_json::Value =
+                serde_json::from_str(&args_json).unwrap_or(serde_json::json!({}));
+            let res = rt.block_on(dispatch(
+                Command::McpCallTool {
+                    server,
+                    tool,
+                    args_json: Some(parsed),
+                },
+                &store,
+            ));
+            println!("{}", serde_json::to_string_pretty(&res).unwrap_or_default());
+        }
         None => {
             let help_res = rt.block_on(dispatch(Command::GetHelp, &store));
             println!(
@@ -550,6 +620,12 @@ fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
         let id = parsed.get("id").cloned().unwrap_or(Value::Null);
         let method = parsed.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let params = parsed.get("params").cloned().unwrap_or_else(|| json!({}));
+
+        // JSON-RPC notifications (no "id", e.g. notifications/initialized)
+        // get NO response — replying desyncs the client's pending request.
+        if parsed.get("id").is_none() {
+            continue;
+        }
 
         let response = match method {
             "initialize" => json!({
@@ -898,6 +974,133 @@ fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
                             "inputSchema": {
                                 "type": "object",
                                 "properties": { "prompt": { "type": "string" } }
+                            }
+                        },
+                        {
+                            "name": "codercraft_mcp_list_servers",
+                            "description": "List external MCP stdio servers registered as CoderCraft clients can call.",
+                            "inputSchema": { "type": "object", "properties": {} }
+                        },
+                        {
+                            "name": "codercraft_mcp_add_server",
+                            "description": "Register an external MCP stdio server (spawned per call, killed after).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "command": { "type": "string" },
+                                    "args": { "type": "array", "items": { "type": "string" } }
+                                },
+                                "required": ["name", "command"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_mcp_remove_server",
+                            "description": "Remove an external MCP stdio server from the registry.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": { "name": { "type": "string" } },
+                                "required": ["name"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_mcp_list_tools",
+                            "description": "Spawn an external MCP stdio server and return its tools/list (CoderCraft as MCP client).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": { "server": { "type": "string" } },
+                                "required": ["server"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_mcp_call_tool",
+                            "description": "Spawn an external MCP stdio server and run one tools/call (CoderCraft as MCP client).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "server": { "type": "string" },
+                                    "tool": { "type": "string" },
+                                    "arguments": { "type": "object" }
+                                },
+                                "required": ["server", "tool"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_pomerado_status",
+                            "description": "Probe Pomerado readiness: OS support, Node 24.21+, OPENAI_API_KEY, absolute root.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "root": { "type": "string" },
+                                    "node_version_output": { "type": "string" }
+                                },
+                                "required": ["root"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_pomerado_mint",
+                            "description": "Plan a Pomerado website-to-MCP mint (read|write authority). Returns shell command to run.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "name": { "type": "string" },
+                                    "url": { "type": "string" },
+                                    "task": { "type": "string" },
+                                    "authority": { "type": "string" },
+                                    "root": { "type": "string" }
+                                },
+                                "required": ["name", "url", "task", "authority", "root"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_pomerado_job",
+                            "description": "Build the Pomerado get-job poll command for a mint job.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": { "job_id": { "type": "string" } },
+                                "required": ["job_id"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_pomerado_answer",
+                            "description": "Build the Pomerado provide-input command to answer a mint question.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "job_id": { "type": "string" },
+                                    "input": { "type": "object" }
+                                },
+                                "required": ["job_id", "input"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_pomerado_cancel",
+                            "description": "Build the Pomerado cancel-job command.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": { "job_id": { "type": "string" } },
+                                "required": ["job_id"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_pomerado_list",
+                            "description": "List minted Pomerado integrations under an absolute root (dirs with pomerado.json).",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": { "root": { "type": "string" } },
+                                "required": ["root"]
+                            }
+                        },
+                        {
+                            "name": "codercraft_pomerado_register",
+                            "description": "Register an emitted Pomerado integration as a CoderCraft MCP server entry.",
+                            "inputSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "root": { "type": "string" },
+                                    "name": { "type": "string" }
+                                },
+                                "required": ["root", "name"]
                             }
                         }
                     ]
@@ -1296,6 +1499,151 @@ fn run_mcp_stdio(rt: &Runtime, store: &DatabaseStore) {
                             .and_then(|p| p.as_str())
                             .map(|p| p.to_string());
                         rt.block_on(dispatch(Command::LlmTest { prompt }, store))
+                    }
+                    "codercraft_mcp_list_servers" => {
+                        rt.block_on(dispatch(Command::ListMcpServers, store))
+                    }
+                    "codercraft_mcp_add_server" => {
+                        let name = args.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        let command = args.get("command").and_then(|c| c.as_str()).unwrap_or("");
+                        let arg_list: Vec<String> = args
+                            .get("args")
+                            .and_then(|a| a.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        rt.block_on(dispatch(
+                            Command::ConfigureMcpServer {
+                                entry: codercraft_core::McpServerEntry {
+                                    name: name.to_string(),
+                                    command: command.to_string(),
+                                    args: arg_list,
+                                    env: std::collections::HashMap::new(),
+                                    is_enabled: true,
+                                },
+                            },
+                            store,
+                        ))
+                    }
+                    "codercraft_mcp_remove_server" => {
+                        let name = args.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(
+                            Command::McpRemoveServer {
+                                name: name.to_string(),
+                            },
+                            store,
+                        ))
+                    }
+                    "codercraft_mcp_list_tools" => {
+                        let server = args.get("server").and_then(|s| s.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(
+                            Command::McpListTools {
+                                server: server.to_string(),
+                            },
+                            store,
+                        ))
+                    }
+                    "codercraft_mcp_call_tool" => {
+                        let server = args.get("server").and_then(|s| s.as_str()).unwrap_or("");
+                        let tool = args.get("tool").and_then(|t| t.as_str()).unwrap_or("");
+                        let tool_args = args.get("arguments").cloned();
+                        rt.block_on(dispatch(
+                            Command::McpCallTool {
+                                server: server.to_string(),
+                                tool: tool.to_string(),
+                                args_json: tool_args,
+                            },
+                            store,
+                        ))
+                    }
+                    "codercraft_pomerado_status" => {
+                        let root = args.get("root").and_then(|r| r.as_str()).unwrap_or("");
+                        let node_out = args
+                            .get("node_version_output")
+                            .and_then(|n| n.as_str())
+                            .map(|s| s.to_string());
+                        rt.block_on(dispatch(
+                            Command::PomeradoStatus {
+                                root: root.to_string(),
+                                node_version_output: node_out,
+                            },
+                            store,
+                        ))
+                    }
+                    "codercraft_pomerado_mint" => {
+                        let name = args.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        let url = args.get("url").and_then(|u| u.as_str()).unwrap_or("");
+                        let task = args.get("task").and_then(|t| t.as_str()).unwrap_or("");
+                        let authority = args
+                            .get("authority")
+                            .and_then(|a| a.as_str())
+                            .unwrap_or("read");
+                        let root = args.get("root").and_then(|r| r.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(
+                            Command::PomeradoMint {
+                                name: name.to_string(),
+                                url: url.to_string(),
+                                task: task.to_string(),
+                                authority: authority.to_string(),
+                                root: root.to_string(),
+                                example_input: None,
+                                authentication_origins: None,
+                            },
+                            store,
+                        ))
+                    }
+                    "codercraft_pomerado_job" => {
+                        let job_id = args.get("job_id").and_then(|j| j.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(
+                            Command::PomeradoJob {
+                                job_id: job_id.to_string(),
+                            },
+                            store,
+                        ))
+                    }
+                    "codercraft_pomerado_answer" => {
+                        let job_id = args.get("job_id").and_then(|j| j.as_str()).unwrap_or("");
+                        let input = args.get("input").cloned().unwrap_or(json!({}));
+                        rt.block_on(dispatch(
+                            Command::PomeradoProvideInput {
+                                job_id: job_id.to_string(),
+                                input,
+                            },
+                            store,
+                        ))
+                    }
+                    "codercraft_pomerado_cancel" => {
+                        let job_id = args.get("job_id").and_then(|j| j.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(
+                            Command::PomeradoCancel {
+                                job_id: job_id.to_string(),
+                            },
+                            store,
+                        ))
+                    }
+                    "codercraft_pomerado_list" => {
+                        let root = args.get("root").and_then(|r| r.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(
+                            Command::PomeradoList {
+                                root: root.to_string(),
+                            },
+                            store,
+                        ))
+                    }
+                    "codercraft_pomerado_register" => {
+                        let root = args.get("root").and_then(|r| r.as_str()).unwrap_or("");
+                        let name = args.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        rt.block_on(dispatch(
+                            Command::PomeradoRegister {
+                                root: root.to_string(),
+                                name: name.to_string(),
+                                mcp_json_text: None,
+                            },
+                            store,
+                        ))
                     }
                     _ => json!({ "error": format!("Unknown tool: {name}") }),
                 };

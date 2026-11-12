@@ -86,6 +86,18 @@ pub struct CoderCraftApp {
     pub llm_vram_line: String,
     pub llm_job_running: bool,
     pub llm_result_rx: Option<std::sync::mpsc::Receiver<String>>,
+
+    // MCP client tab state: CoderCraft as MCP client over stdio.
+    // Registry persists to ~/.craft/codercraft_mcp_servers.json.
+    pub mcp_new_name: String,
+    pub mcp_new_command: String,
+    pub mcp_new_args: String,
+    pub mcp_selected_server: String,
+    pub mcp_tools_cache: Vec<serde_json::Value>,
+    pub mcp_call_tool: String,
+    pub mcp_call_args: String,
+    pub mcp_call_result: String,
+    pub mcp_status_line: String,
 }
 
 impl CoderCraftApp {
@@ -164,6 +176,16 @@ impl CoderCraftApp {
             llm_vram_line: String::new(),
             llm_job_running: false,
             llm_result_rx: None,
+
+            mcp_new_name: String::new(),
+            mcp_new_command: String::new(),
+            mcp_new_args: String::new(),
+            mcp_selected_server: String::new(),
+            mcp_tools_cache: vec![],
+            mcp_call_tool: String::new(),
+            mcp_call_args: "{\"arguments\": {}}".to_string(),
+            mcp_call_result: String::new(),
+            mcp_status_line: String::new(),
         })
     }
 
@@ -212,6 +234,39 @@ impl CoderCraftApp {
             self.llm_result_rx = None;
         }
     }
+    pub fn modal_border_color(&self) -> egui::Color32 {
+        if self.is_dark_theme {
+            egui::Color32::WHITE
+        } else {
+            egui::Color32::BLACK
+        }
+    }
+
+    pub fn modal_fill_color(&self) -> egui::Color32 {
+        if self.is_dark_theme {
+            // Opaque — never translucent so text stays readable.
+            egui::Color32::from_rgb(19, 24, 35)
+        } else {
+            egui::Color32::from_rgb(250, 250, 252)
+        }
+    }
+
+    pub fn secondary_text_color(&self) -> egui::Color32 {
+        if self.is_dark_theme {
+            // ~10:1 on the dark panel fill (was 139,148,158 at ~4:1).
+            egui::Color32::from_rgb(203, 213, 225)
+        } else {
+            egui::Color32::from_rgb(51, 65, 85)
+        }
+    }
+
+    pub fn modal_frame(&self, style: &egui::Style) -> egui::Frame {
+        egui::Frame::window(style)
+            .fill(self.modal_fill_color())
+            .stroke(egui::Stroke::new(1.5, self.modal_border_color()))
+            .shadow(egui::Shadow::NONE)
+    }
+
     pub fn apply_bespoke_visuals(&self, ctx: &egui::Context) {
         let mut visuals = if self.is_dark_theme {
             egui::Visuals::dark()
@@ -220,23 +275,44 @@ impl CoderCraftApp {
         };
 
         if self.is_dark_theme {
-            // Tokyo Night / Cyberpunk Slate Palette
+            // Tokyo Night / Cyberpunk Slate Palette — all fills fully opaque.
             visuals.panel_fill = egui::Color32::from_rgb(18, 22, 30);
-            visuals.window_fill = egui::Color32::from_rgb(15, 18, 26);
-            visuals.hyperlink_color = egui::Color32::from_rgb(88, 166, 255);
+            visuals.window_fill = self.modal_fill_color();
+            visuals.window_stroke = egui::Stroke::new(1.5, egui::Color32::WHITE);
+            visuals.window_shadow = egui::Shadow::NONE;
+            visuals.window_highlight_topmost = true;
+            // High-contrast body text: near-white instead of the dim default gray.
+            visuals.override_text_color = Some(egui::Color32::from_rgb(236, 237, 243));
+            visuals.hyperlink_color = egui::Color32::from_rgb(121, 184, 255);
+            visuals.faint_bg_color = egui::Color32::from_rgb(22, 27, 36);
+            visuals.extreme_bg_color = egui::Color32::from_rgb(10, 13, 20);
+            visuals.code_bg_color = egui::Color32::from_rgb(22, 27, 36);
             visuals.selection.bg_fill = egui::Color32::from_rgb(46, 75, 120);
             visuals.selection.stroke =
                 egui::Stroke::new(1.0, egui::Color32::from_rgb(88, 166, 255));
             visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgb(22, 27, 36);
             visuals.widgets.noninteractive.bg_stroke =
                 egui::Stroke::new(1.0, egui::Color32::from_rgb(38, 46, 62));
+            visuals.widgets.noninteractive.fg_stroke =
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(236, 237, 243));
             visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(26, 32, 44);
             visuals.widgets.inactive.bg_stroke =
                 egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 55, 72));
+            visuals.widgets.inactive.fg_stroke =
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(236, 237, 243));
             visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(36, 45, 62);
             visuals.widgets.hovered.bg_stroke =
                 egui::Stroke::new(1.0, egui::Color32::from_rgb(88, 166, 255));
             visuals.widgets.active.bg_fill = egui::Color32::from_rgb(44, 56, 78);
+        } else {
+            // Light theme: keep fills opaque with a solid black modal border.
+            visuals.panel_fill = egui::Color32::from_rgb(244, 244, 246);
+            visuals.window_fill = self.modal_fill_color();
+            visuals.window_stroke = egui::Stroke::new(1.5, egui::Color32::BLACK);
+            visuals.window_shadow = egui::Shadow::NONE;
+            visuals.window_highlight_topmost = true;
+            visuals.override_text_color = Some(egui::Color32::from_rgb(16, 20, 28));
+            visuals.hyperlink_color = egui::Color32::from_rgb(9, 105, 218);
         }
 
         ctx.set_visuals(visuals);
@@ -694,11 +770,17 @@ impl eframe::App for CoderCraftApp {
             });
         });
 
-        // MODAL: Basic Auth Dialog
+        // MODAL: Basic Auth Dialog — fully opaque with a solid theme border.
         if self.show_auth_modal {
+            let modal_frame = self.modal_frame(ui.style());
             egui::Window::new("🔐 Basic Authentication")
                 .collapsible(false)
                 .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .order(egui::Order::Foreground)
+                .fade_in(false)
+                .fade_out(false)
+                .frame(modal_frame)
                 .show(ui.ctx(), |ui| {
                     ui.label("Enter sovereign credentials to unlock privileged tools:");
                     ui.horizontal(|ui| {
@@ -731,11 +813,19 @@ impl eframe::App for CoderCraftApp {
         }
 
         // MODAL: Comprehensive Help, Architecture & Competitive Matrix Dialog
+        // Fully opaque with a solid theme border (white in dark, black in light).
         if self.show_about_dialog {
+            let modal_frame = self.modal_frame(ui.style());
             egui::Window::new("📘 CoderCraft Help & Competitive Architecture Manual")
                 .collapsible(false)
                 .resizable(true)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .order(egui::Order::Foreground)
+                .fade_in(false)
+                .fade_out(false)
+                .frame(modal_frame)
                 .default_size([880.0, 580.0])
+                .min_size([560.0, 400.0])
                 .show(ui.ctx(), |ui| {
                     ui.horizontal(|ui| {
                         if ui.selectable_label(self.active_help_tab == 0, "📖 Overview & Features").clicked() {
@@ -936,8 +1026,19 @@ impl CoderCraftApp {
         if self.show_left_sidebar {
             egui::Panel::left("left_sidebar").show(ui, |ui| {
                 ui.set_width(260.0);
-                ui.heading("📁 Workspaces & Repos");
-                ui.text_edit_singleline(&mut self.selected_repo);
+                let primary = if self.is_dark_theme {
+                    egui::Color32::from_rgb(236, 237, 243)
+                } else {
+                    egui::Color32::from_rgb(16, 20, 28)
+                };
+                let secondary = self.secondary_text_color();
+                ui.label(egui::RichText::new("📁 Workspaces & Repos").strong().color(primary).size(15.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.selected_repo)
+                        .desired_width(f32::INFINITY)
+                        .hint_text("Workspace path…")
+                        .text_color(primary),
+                );
                 ui.add_space(4.0);
 
                 let fleet_repos = [
@@ -953,12 +1054,15 @@ impl CoderCraftApp {
                 ];
                 egui::ScrollArea::vertical()
                     .max_height(120.0)
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
                         for repo in &fleet_repos {
                             let repo_path = format!("D:\\Dev\\repos\\{}", repo);
                             let is_selected = self.selected_repo == repo_path;
+                            let label = egui::RichText::new(format!("📦 {}", repo))
+                                .color(if is_selected { primary } else { secondary });
                             if ui
-                                .selectable_label(is_selected, format!("📦 {}", repo))
+                                .selectable_label(is_selected, label)
                                 .clicked()
                             {
                                 self.selected_repo = repo_path.clone();
@@ -971,19 +1075,25 @@ impl CoderCraftApp {
 
                 ui.add_space(6.0);
                 ui.separator();
-                ui.heading("📄 Workspace Files");
+                ui.label(egui::RichText::new("📄 Workspace Files").strong().color(primary).size(15.0));
                 let tree =
                     CoderCraftCore::scan_tree(std::path::Path::new(&self.selected_repo), 0, 2);
                 egui::ScrollArea::vertical()
                     .max_height(180.0)
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
                         for child in tree.children {
                             if child.is_dir {
-                                ui.label(format!("📁 {}/", child.name));
+                                ui.label(
+                                    egui::RichText::new(format!("📁 {}/", child.name))
+                                        .color(secondary),
+                                );
                             } else {
                                 let is_open = self.selected_file.as_deref() == Some(&child.path);
+                                let label = egui::RichText::new(format!("📄 {}", child.name))
+                                    .color(if is_open { primary } else { secondary });
                                 if ui
-                                    .selectable_label(is_open, format!("📄 {}", child.name))
+                                    .selectable_label(is_open, label)
                                     .clicked()
                                 {
                                     self.selected_file = Some(child.path.clone());
@@ -1004,12 +1114,13 @@ impl CoderCraftApp {
                     });
 
                 ui.separator();
-                ui.heading("🔍 AST Symbols");
+                ui.label(egui::RichText::new("🔍 AST Symbols").strong().color(primary).size(15.0));
                 if self.active_symbols.is_empty() {
-                    ui.label("No top-level declarations.");
+                    ui.label(egui::RichText::new("No top-level declarations.").color(secondary));
                 } else {
                     egui::ScrollArea::vertical()
                         .max_height(140.0)
+                        .auto_shrink([false, false])
                         .show(ui, |ui| {
                             for sym in &self.active_symbols {
                                 let icon = match sym.kind.as_str() {
@@ -1019,9 +1130,14 @@ impl CoderCraftApp {
                                     "trait" => "📜",
                                     _ => "🔹",
                                 };
-                                if ui
-                                    .button(format!("{icon} {} (L{})", sym.name, sym.line_number))
-                                    .clicked()
+                                // Subtle row (no button chrome) so no white pill background.
+                                let label = egui::RichText::new(format!(
+                                    "{icon} {} (L{})",
+                                    sym.name, sym.line_number
+                                ))
+                                .color(secondary)
+                                .monospace();
+                                if ui.selectable_label(false, label).clicked()
                                 {
                                     self.status_msg =
                                         format!("Jump to {}:{}", sym.name, sym.line_number);
@@ -1155,12 +1271,292 @@ impl CoderCraftApp {
                         });
                     }
                     ActiveRightTab::McpRegistry => {
-                        ui.heading("🔌 MCP Tool Server Registry");
-                        for s in &self.core.mcp_servers {
+                        self.llm_poll();
+                        ui.heading("🔌 MCP Client — External Stdio Servers");
+                        ui.label(
+                            "CoderCraft spawns each server per call (initialize -> tools/list or tools/call -> kill). Registry persists to ~/.craft/codercraft_mcp_servers.json.",
+                        );
+                        if self.mcp_selected_server.trim().is_empty() {
+                            if let Some(first) =
+                                codercraft_core::mcp_client::load_servers().first()
+                            {
+                                self.mcp_selected_server = first.name.clone();
+                            }
+                        }
+                        ui.separator();
+                        ui.label(egui::RichText::new("Add server:").strong());
+                        ui.horizontal(|ui| {
+                            ui.label("Name:");
+                            ui.text_edit_singleline(&mut self.mcp_new_name);
+                            ui.label("Command:");
+                            ui.text_edit_singleline(&mut self.mcp_new_command);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Args (space-separated):");
+                            ui.text_edit_singleline(&mut self.mcp_new_args);
+                            if ui.button("➕ Register").clicked()
+                                && !self.mcp_new_name.trim().is_empty()
+                                && !self.mcp_new_command.trim().is_empty()
+                            {
+                                let arg_list: Vec<String> = self
+                                    .mcp_new_args
+                                    .split_whitespace()
+                                    .map(|s| s.to_string())
+                                    .collect();
+                                let mut servers =
+                                    codercraft_core::mcp_client::load_servers();
+                                let entry = codercraft_core::McpServerEntry {
+                                    name: self.mcp_new_name.trim().to_string(),
+                                    command: self.mcp_new_command.trim().to_string(),
+                                    args: arg_list,
+                                    env: std::collections::HashMap::new(),
+                                    is_enabled: true,
+                                };
+                                match codercraft_core::mcp_client::save_servers({
+                                    if let Some(slot) = servers
+                                        .iter_mut()
+                                        .find(|s| {
+                                            s.name.eq_ignore_ascii_case(&entry.name)
+                                        })
+                                    {
+                                        *slot = entry.clone();
+                                    } else {
+                                        servers.push(entry.clone());
+                                    }
+                                    &servers
+                                }) {
+                                    Ok(()) => {
+                                        self.core.mcp_servers = servers.clone();
+                                        self.mcp_selected_server = entry.name.clone();
+                                        self.mcp_status_line = format!(
+                                            "registered '{}'",
+                                            entry.name
+                                        );
+                                        self.mcp_new_name.clear();
+                                        self.mcp_new_command.clear();
+                                        self.mcp_new_args.clear();
+                                    }
+                                    Err(e) => {
+                                        self.mcp_status_line =
+                                            format!("register failed: {e}");
+                                    }
+                                }
+                            }
+                        });
+                        ui.separator();
+                        let servers = codercraft_core::mcp_client::load_servers();
+                        self.core.mcp_servers = servers.clone();
+                        ui.horizontal(|ui| {
+                            ui.label("Server:");
+                            egui::ComboBox::from_id_salt("mcp_server_pick")
+                                .selected_text(if self.mcp_selected_server.is_empty() {
+                                    "(pick one)".to_string()
+                                } else {
+                                    self.mcp_selected_server.clone()
+                                })
+                                .show_ui(ui, |ui| {
+                                    for s in &servers {
+                                        ui.selectable_value(
+                                            &mut self.mcp_selected_server,
+                                            s.name.clone(),
+                                            format!(
+                                                "{} — {} {}",
+                                                s.name,
+                                                s.command,
+                                                s.args.join(" ")
+                                            ),
+                                        );
+                                    }
+                                });
+                            if ui.button("🔄 List tools").clicked()
+                                && !self.mcp_selected_server.trim().is_empty()
+                            {
+                                let name = self.mcp_selected_server.clone();
+                                if let Some(entry) = servers
+                                    .iter()
+                                    .find(|s| s.name.eq_ignore_ascii_case(&name))
+                                    .cloned()
+                                {
+                                    let rt = tokio::runtime::Builder::new_current_thread()
+                                        .enable_all()
+                                        .build();
+                                    match rt {
+                                        Ok(rt) => {
+                                            match rt.block_on(
+                                                codercraft_core::mcp_client::list_tools_live(
+                                                    &entry,
+                                                ),
+                                            ) {
+                                                Ok(result) => {
+                                                    let tools = result
+                                                        .get("tools")
+                                                        .and_then(|t| t.as_array())
+                                                        .cloned()
+                                                        .unwrap_or_default();
+                                                    self.mcp_tools_cache = tools;
+                                                    self.mcp_status_line = format!(
+                                                        "listed {} tools on '{}'",
+                                                        self.mcp_tools_cache.len(),
+                                                        entry.name
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    self.mcp_tools_cache.clear();
+                                                    self.mcp_status_line =
+                                                        format!("list failed: {e}");
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            self.mcp_status_line =
+                                                format!("runtime failed: {e}");
+                                        }
+                                    }
+                                } else {
+                                    self.mcp_status_line =
+                                        format!("unknown server '{name}'");
+                                }
+                            }
+                            if ui.button("🗑 Remove").clicked()
+                                && !self.mcp_selected_server.trim().is_empty()
+                            {
+                                let mut kept = servers.clone();
+                                kept.retain(|s| {
+                                    !s.name.eq_ignore_ascii_case(&self.mcp_selected_server)
+                                });
+                                match codercraft_core::mcp_client::save_servers(&kept) {
+                                    Ok(()) => {
+                                        self.core.mcp_servers = kept;
+                                        self.mcp_tools_cache.clear();
+                                        self.mcp_status_line = "removed".to_string();
+                                        self.mcp_selected_server.clear();
+                                    }
+                                    Err(e) => {
+                                        self.mcp_status_line =
+                                            format!("remove failed: {e}");
+                                    }
+                                }
+                            }
+                        });
+                        if !self.mcp_status_line.is_empty() {
+                            ui.label(format!("Status: {}", self.mcp_status_line));
+                        }
+                        if !self.mcp_tools_cache.is_empty() {
+                            ui.label(format!(
+                                "Tools ({}) — click to pick:",
+                                self.mcp_tools_cache.len()
+                            ));
+                            egui::ScrollArea::vertical()
+                                .max_height(160.0)
+                                .show(ui, |ui| {
+                                    for t in self.mcp_tools_cache.clone() {
+                                        let tname = t
+                                            .get("name")
+                                            .and_then(|n| n.as_str())
+                                            .unwrap_or("?");
+                                        let desc = t
+                                            .get("description")
+                                            .and_then(|d| d.as_str())
+                                            .unwrap_or("");
+                                        if ui
+                                            .selectable_label(
+                                                self.mcp_call_tool == tname,
+                                                format!("{tname} — {desc}"),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.mcp_call_tool = tname.to_string();
+                                        }
+                                    }
+                                });
+                        }
+                        ui.separator();
+                        ui.label(egui::RichText::new("Call tool:").strong());
+                        ui.horizontal(|ui| {
+                            ui.label("Tool:");
+                            ui.text_edit_singleline(&mut self.mcp_call_tool);
+                        });
+                        ui.label("Arguments (JSON object):");
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.mcp_call_args)
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(3)
+                                .font(egui::TextStyle::Monospace),
+                        );
+                        if ui.button("▶ Call via stdio").clicked()
+                            && !self.mcp_selected_server.trim().is_empty()
+                            && !self.mcp_call_tool.trim().is_empty()
+                        {
+                            let name = self.mcp_selected_server.clone();
+                            let tool = self.mcp_call_tool.clone();
+                            let args: serde_json::Value =
+                                serde_json::from_str(&self.mcp_call_args)
+                                    .unwrap_or(serde_json::json!({}));
+                            self.mcp_call_result = format!("calling '{tool}' on '{name}' ...");
+                            let servers = codercraft_core::mcp_client::load_servers();
+                            if let Some(entry) = servers
+                                .iter()
+                                .find(|s| s.name.eq_ignore_ascii_case(&name))
+                                .cloned()
+                            {
+                                let rt = tokio::runtime::Builder::new_current_thread()
+                                    .enable_all()
+                                    .build();
+                                match rt {
+                                    Ok(rt) => {
+                                        match rt.block_on(
+                                            codercraft_core::mcp_client::call_tool_live(
+                                                &entry, &tool, args,
+                                            ),
+                                        ) {
+                                            Ok(result) => {
+                                                self.mcp_call_result =
+                                                    serde_json::to_string_pretty(&result)
+                                                        .unwrap_or_else(|_| {
+                                                            result.to_string()
+                                                        });
+                                                self.mcp_status_line = format!(
+                                                    "called '{tool}' on '{}'",
+                                                    entry.name
+                                                );
+                                            }
+                                            Err(e) => {
+                                                self.mcp_call_result =
+                                                    format!("call failed: {e}");
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        self.mcp_call_result =
+                                            format!("runtime failed: {e}");
+                                    }
+                                }
+                            } else {
+                                self.mcp_call_result = format!("unknown server '{name}'");
+                            }
+                        }
+                        if !self.mcp_call_result.is_empty() {
+                            egui::ScrollArea::vertical()
+                                .max_height(200.0)
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(&self.mcp_call_result)
+                                            .monospace()
+                                            .size(11.0),
+                                    );
+                                });
+                        }
+                        ui.separator();
+                        ui.label(egui::RichText::new("Registered commands:").strong());
+                        for s in &servers {
                             ui.group(|ui| {
                                 ui.label(egui::RichText::new(&s.name).strong());
-                                ui.label(format!("Cmd: {}", s.command));
-                                let state_txt = if s.is_enabled { "Status: ACTIVE (FastMCP JSON-RPC)" } else { "Status: DISABLED" };
+                                ui.label(format!("Cmd: {} {}", s.command, s.args.join(" ")));
+                                let state_txt = if s.is_enabled {
+                                    "Status: ACTIVE (MCP stdio client, one-shot per call)"
+                                } else {
+                                    "Status: DISABLED"
+                                };
                                 ui.label(state_txt);
                             });
                         }
@@ -1514,14 +1910,22 @@ impl CoderCraftApp {
                 });
             });
 
-            // Chat Turns ScrollArea
-            egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
+            // Chat Turns ScrollArea — fills available height above the composer.
+            let secondary = self.secondary_text_color();
+            let prompt_reserve = 190.0;
+            let chat_height = (ui.available_height() - prompt_reserve).max(220.0);
+            egui::ScrollArea::vertical()
+                .max_height(chat_height)
+                .max_width(f32::INFINITY)
+                .auto_shrink([false, false])
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
                 for turn in &self.agent_session.turns {
                     ui.group(|ui| {
                         let role_label = match turn.role.as_str() {
                             "user" => egui::RichText::new("🧑 User").strong().color(egui::Color32::from_rgb(88, 166, 255)),
                             "assistant" => egui::RichText::new("🤖 CoderCraft Assistant").strong().color(egui::Color32::from_rgb(63, 185, 80)),
-                            _ => egui::RichText::new("⚙️ System").monospace().color(egui::Color32::GRAY),
+                            _ => egui::RichText::new("⚙️ System").monospace().color(secondary),
                         };
                         ui.label(role_label);
                         ui.label(&turn.content);
@@ -1531,9 +1935,14 @@ impl CoderCraftApp {
             });
 
             ui.separator();
-            // Prompt Composer Area
+            // Prompt Composer Area — full-width, multi-row so it never feels narrow.
             ui.label(egui::RichText::new("Prompt / Intent:").strong());
-            ui.text_edit_multiline(&mut self.chat_prompt);
+            ui.add(
+                egui::TextEdit::multiline(&mut self.chat_prompt)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(5)
+                    .hint_text("Describe the change, paste an error, or ask for a plan… (Ctrl+Enter to send)"),
+            );
             ui.horizontal(|ui| {
                 if ui.button("🚀 Send to Agent").clicked() && !self.chat_prompt.is_empty() {
                     let prompt = self.chat_prompt.clone();
@@ -1596,6 +2005,7 @@ impl CoderCraftApp {
             ui.label("Every Craft app in the sovereign fleet with live TCP socket pinging and standardized ports.");
             ui.separator();
 
+            let offline_color = self.secondary_text_color();
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.columns(3, |columns| {
                     for (i, p) in self.core.fleet_depot.projects.iter().enumerate() {
@@ -1608,7 +2018,7 @@ impl CoderCraftApp {
                                         let ping_str = p.ping_ms.map(|m| format!("{}ms", m)).unwrap_or_else(|| "1ms".to_string());
                                         ui.colored_label(egui::Color32::from_rgb(63, 185, 80), format!("● ONLINE ({ping_str})"));
                                     } else {
-                                        ui.colored_label(egui::Color32::from_rgb(139, 148, 158), "○ OFFLINE");
+                                        ui.colored_label(offline_color, "○ OFFLINE");
                                     }
                                 });
                             });
@@ -1720,19 +2130,19 @@ impl CoderCraftApp {
                             + p2.y * (3.0 * (1.0 - t) * t.powi(2))
                             + p3.y * (t.powi(3));
                         let pulse_pt = egui::pos2(px, py);
-                        painter.circle_filled(pulse_pt, 4.0, egui::Color32::WHITE);
+                        painter.circle_filled(pulse_pt, 4.0, egui::Color32::from_rgb(236, 237, 243));
                     }
                 }
             }
 
-            // Draw Worker Nodes
+            // Draw Worker Nodes — high-contrast text (near-white primary, light secondary).
             for w in &self.swarm_ledger.workers {
                 let rect = egui::Rect::from_min_size(canvas_origin + egui::Vec2::new(w.pos_x, w.pos_y), egui::Vec2::new(180.0, 80.0));
                 painter.rect_filled(rect, 8.0, egui::Color32::from_rgb(22, 27, 36));
                 painter.rect_stroke(rect, 8.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(88, 166, 255)), egui::StrokeKind::Inside);
-                painter.text(rect.min + egui::Vec2::new(10.0, 15.0), egui::Align2::LEFT_TOP, &w.name, egui::FontId::proportional(14.0), egui::Color32::WHITE);
-                painter.text(rect.min + egui::Vec2::new(10.0, 35.0), egui::Align2::LEFT_TOP, format!("Role: {:?}", w.role), egui::FontId::proportional(11.0), egui::Color32::from_rgb(139, 148, 158));
-                painter.text(rect.min + egui::Vec2::new(10.0, 52.0), egui::Align2::LEFT_TOP, format!("Status: {:?}", w.status), egui::FontId::proportional(11.0), egui::Color32::from_rgb(63, 185, 80));
+                painter.text(rect.min + egui::Vec2::new(10.0, 15.0), egui::Align2::LEFT_TOP, &w.name, egui::FontId::proportional(14.0), egui::Color32::from_rgb(236, 237, 243));
+                painter.text(rect.min + egui::Vec2::new(10.0, 35.0), egui::Align2::LEFT_TOP, format!("Role: {:?}", w.role), egui::FontId::proportional(11.0), egui::Color32::from_rgb(203, 213, 225));
+                painter.text(rect.min + egui::Vec2::new(10.0, 52.0), egui::Align2::LEFT_TOP, format!("Status: {:?}", w.status), egui::FontId::proportional(11.0), egui::Color32::from_rgb(126, 231, 135));
             }
 
             // Draw Task Nodes
@@ -1740,9 +2150,9 @@ impl CoderCraftApp {
                 let rect = egui::Rect::from_min_size(canvas_origin + egui::Vec2::new(task.pos_x, task.pos_y), egui::Vec2::new(280.0, 75.0));
                 painter.rect_filled(rect, 8.0, egui::Color32::from_rgb(26, 32, 44));
                 painter.rect_stroke(rect, 8.0, egui::Stroke::new(1.5, egui::Color32::from_rgb(188, 140, 255)), egui::StrokeKind::Inside);
-                painter.text(rect.min + egui::Vec2::new(10.0, 12.0), egui::Align2::LEFT_TOP, format!("{}: {}", task.id, task.title), egui::FontId::proportional(13.0), egui::Color32::WHITE);
-                painter.text(rect.min + egui::Vec2::new(10.0, 32.0), egui::Align2::LEFT_TOP, format!("Target: {}", task.target_file), egui::FontId::proportional(11.0), egui::Color32::from_rgb(139, 148, 158));
-                painter.text(rect.min + egui::Vec2::new(10.0, 50.0), egui::Align2::LEFT_TOP, format!("State: {:?} | Pheromone: {:.0}%", task.state, task.pheromone * 100.0), egui::FontId::proportional(11.0), egui::Color32::from_rgb(210, 153, 34));
+                painter.text(rect.min + egui::Vec2::new(10.0, 12.0), egui::Align2::LEFT_TOP, format!("{}: {}", task.id, task.title), egui::FontId::proportional(13.0), egui::Color32::from_rgb(236, 237, 243));
+                painter.text(rect.min + egui::Vec2::new(10.0, 32.0), egui::Align2::LEFT_TOP, format!("Target: {}", task.target_file), egui::FontId::proportional(11.0), egui::Color32::from_rgb(203, 213, 225));
+                painter.text(rect.min + egui::Vec2::new(10.0, 50.0), egui::Align2::LEFT_TOP, format!("State: {:?} | Pheromone: {:.0}%", task.state, task.pheromone * 100.0), egui::FontId::proportional(11.0), egui::Color32::from_rgb(232, 190, 100));
             }
 
             ui.add_space(6.0);
@@ -1880,7 +2290,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = CoderCraftApp::new()?;
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1440.0, 900.0])
+            .with_inner_size([1600.0, 950.0])
+            .with_min_inner_size([1100.0, 700.0])
             .with_title("CoderCraft — Sovereign Agentic IDE"),
         ..Default::default()
     };

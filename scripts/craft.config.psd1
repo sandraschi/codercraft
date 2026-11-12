@@ -11,8 +11,8 @@
     CliPackage  = 'codercraft-mcp'
     CliBin      = 'codercraft-cli'
     CliSmoke    = @('status')
-    McpArgs     = @()
-    McpSmoke    = @()
+    McpArgs     = @('--mcp')
+    McpSmoke    = @('--mcp')
     Installer   = $true
-    Mcpb        = $false
+    Mcpb        = $true
 }

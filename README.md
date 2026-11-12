@@ -1,5 +1,10 @@
 # CoderCraft — Local-First Agentic IDE & Universal MCP Server
 
+![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)
+![Rust 1.90+](https://img.shields.io/badge/rust-1.90%2B-orange?logo=rust)
+![MCP stdio](https://img.shields.io/badge/MCP-stdio-purple)
+![ArtCraft harness](https://img.shields.io/badge/ArtCraft-harness-green)
+
 **CoderCraft** is an ArtCraft-tier local-first agentic integrated development environment (IDE) that subsumes the capabilities of **Claude Desktop, OpenCode, Cursor, Zed, and Antigravity (AGY)** into a unified, zero-runtime-tax native binary.
 
 Built in 100% native Rust (`egui 0.37` + `wgpu`) on **Port 14128**, CoderCraft delivers sub-millisecond rendering, an instant (<30ms) startup time, and a minimal ~35MB RAM footprint with zero Electron bloat.

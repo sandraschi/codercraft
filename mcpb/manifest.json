@@ -1,0 +1,169 @@
+{
+  "manifest_version": "0.2",
+  "name": "codercraft",
+  "display_name": "CoderCraft",
+  "version": "__VERSION__",
+  "description": "CoderCraft MCP server (34 tools).",
+  "author": {
+    "name": "Sandra Schipal",
+    "url": "https://github.com/sandraschi"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sandraschi/codercraft"
+  },
+  "license": "MIT",
+  "server": {
+    "type": "binary",
+    "entry_point": "codercraft-cli.exe",
+    "mcp_config": {
+      "command": "${__dirname}/codercraft-cli.exe",
+      "args": [
+        "--mcp"
+      ]
+    }
+  },
+  "compatibility": {
+    "platforms": [
+      "win32"
+    ]
+  },
+  "tools": [
+    {
+      "name": "codercraft_status",
+      "description": "Check CoderCraft engine status, active language, and connected MCP servers."
+    },
+    {
+      "name": "codercraft_open_file",
+      "description": "Open and inspect source file buffer metadata."
+    },
+    {
+      "name": "codercraft_read_file",
+      "description": "Read line range from file."
+    },
+    {
+      "name": "codercraft_write_file",
+      "description": "Write or overwrite content to file."
+    },
+    {
+      "name": "codercraft_apply_edit",
+      "description": "Replace exact target block with replacement string in file."
+    },
+    {
+      "name": "codercraft_grep",
+      "description": "Search workspace files for matching text."
+    },
+    {
+      "name": "codercraft_extract_symbols",
+      "description": "Extract AST function, struct, and enum declarations from file."
+    },
+    {
+      "name": "codercraft_index_workspace",
+      "description": "Index workspace directory, instruction files, and tree."
+    },
+    {
+      "name": "codercraft_plan",
+      "description": "Generate multi-step architectural implementation plan (Plan Mode)."
+    },
+    {
+      "name": "codercraft_refactor",
+      "description": "Synthesize autonomous AST code refactoring proposal (Build Mode)."
+    },
+    {
+      "name": "codercraft_lint",
+      "description": "Execute active linter on workspace."
+    },
+    {
+      "name": "codercraft_shell",
+      "description": "Execute shell command in workspace sandbox."
+    },
+    {
+      "name": "codercraft_fleet_depot",
+      "description": "List all 12 Craft fleet apps, ports, and execution states."
+    },
+    {
+      "name": "codercraft_probe_depot",
+      "description": "Actively probes TCP ports for all 12 Craft fleet apps and returns latencies."
+    },
+    {
+      "name": "codercraft_fleet_launch",
+      "description": "Launch a Craft fleet app by name."
+    },
+    {
+      "name": "codercraft_swarm_status",
+      "description": "Inspect Stigmergic Agent Swarm supervisor workers and task ledger."
+    },
+    {
+      "name": "codercraft_help",
+      "description": "Get comprehensive CoderCraft help, feature summary, and capabilities."
+    },
+    {
+      "name": "codercraft_compare",
+      "description": "Detailed architectural comparison matrix: CoderCraft vs Claude Desktop vs OpenCode vs AGY."
+    },
+    {
+      "name": "codercraft_apply_patch",
+      "description": "Apply multi-file patch with OpenCode markers (*** Add File / *** Update File / *** Delete File / *** Move to)."
+    },
+    {
+      "name": "codercraft_glob",
+      "description": "Gitignore-aware file glob (supports **, *, ?)."
+    },
+    {
+      "name": "codercraft_check_permission",
+      "description": "Check allow/ask/deny verdict for a mutating tool call before running it."
+    },
+    {
+      "name": "codercraft_session_create",
+      "description": "Create an eternal-memory chat session."
+    },
+    {
+      "name": "codercraft_session_append",
+      "description": "Append a turn (user/assistant) to an eternal-memory session."
+    },
+    {
+      "name": "codercraft_session_list",
+      "description": "List eternal-memory sessions with optional workspace/date filters."
+    },
+    {
+      "name": "codercraft_session_search",
+      "description": "Full-text search across every session turn (eternal memory elicitation)."
+    },
+    {
+      "name": "codercraft_session_recall",
+      "description": "Recall what was discussed in a calendar month (year + 1-12 month)."
+    },
+    {
+      "name": "codercraft_session_read",
+      "description": "Read one session transcript."
+    },
+    {
+      "name": "codercraft_run",
+      "description": "Run autonomous goal loop (explore -> act -> verify), every step logged to eternal memory. Returns session_id plus step ledger."
+    },
+    {
+      "name": "codercraft_llm_status",
+      "description": "LLM provider status: file config (keys redacted) plus reachability probe of the configured provider."
+    },
+    {
+      "name": "codercraft_llm_list_models",
+      "description": "List models for a provider (live list; curated only for Anthropic with a key)."
+    },
+    {
+      "name": "codercraft_llm_select",
+      "description": "Select provider + model, persist it, and switch VRAM (Ollama evicts others and warms the pick)."
+    },
+    {
+      "name": "codercraft_llm_set_key",
+      "description": "Store a cloud provider API key in ~/.craft/ai_config.json. Never echoed back."
+    },
+    {
+      "name": "codercraft_llm_evict",
+      "description": "Evict Ollama residents; keep one warm when given."
+    },
+    {
+      "name": "codercraft_llm_test",
+      "description": "Probe the configured brain with a short completion (90s cap)."
+    }
+  ]
+}

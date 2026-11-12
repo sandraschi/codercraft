@@ -17,7 +17,7 @@ repository = "https://github.com/sandraschi/codercraft"
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "process", "io-std"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 thiserror = "1.0"
 clap = { version = "4.5", features = ["derive"] }

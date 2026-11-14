@@ -256,7 +256,7 @@ impl CoderCraftApp {
             // ~10:1 on the dark panel fill (was 139,148,158 at ~4:1).
             egui::Color32::from_rgb(203, 213, 225)
         } else {
-            egui::Color32::from_rgb(51, 65, 85)
+            egui::Color32::BLACK
         }
     }
 
@@ -306,12 +306,20 @@ impl CoderCraftApp {
             visuals.widgets.active.bg_fill = egui::Color32::from_rgb(44, 56, 78);
         } else {
             // Light theme: keep fills opaque with a solid black modal border.
-            visuals.panel_fill = egui::Color32::from_rgb(244, 244, 246);
-            visuals.window_fill = self.modal_fill_color();
+            visuals.panel_fill = egui::Color32::WHITE;
+            visuals.window_fill = egui::Color32::WHITE;
+            visuals.extreme_bg_color = egui::Color32::WHITE;
+            visuals.faint_bg_color = egui::Color32::WHITE;
             visuals.window_stroke = egui::Stroke::new(1.5, egui::Color32::BLACK);
             visuals.window_shadow = egui::Shadow::NONE;
             visuals.window_highlight_topmost = true;
-            visuals.override_text_color = Some(egui::Color32::from_rgb(16, 20, 28));
+            visuals.override_text_color = Some(egui::Color32::BLACK);
+            visuals.weak_text_color = Some(egui::Color32::BLACK);
+            visuals.widgets.noninteractive.fg_stroke =
+                egui::Stroke::new(1.0, egui::Color32::BLACK);
+            visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, egui::Color32::BLACK);
+            visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.5, egui::Color32::BLACK);
+            visuals.widgets.active.fg_stroke = egui::Stroke::new(1.5, egui::Color32::BLACK);
             visuals.hyperlink_color = egui::Color32::from_rgb(9, 105, 218);
         }
 

@@ -5,6 +5,16 @@
 ![MCP stdio](https://img.shields.io/badge/MCP-stdio-purple)
 ![ArtCraft harness](https://img.shields.io/badge/ArtCraft-harness-green)
 
+## Install
+
+Tell Cursor, Claude, Antigravity, or OpenCode: **Install this.**
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-craft.ps1
+```
+
+Installs the Windows app, the CLI, and the MCP bundle.
+
 **CoderCraft** is an ArtCraft-tier local-first agentic integrated development environment (IDE) that subsumes the capabilities of **Claude Desktop, OpenCode, Cursor, Zed, and Antigravity (AGY)** into a unified, zero-runtime-tax native binary.
 
 Built in 100% native Rust (`egui 0.37` + `wgpu`) on **Port 14128**, CoderCraft delivers sub-millisecond rendering, an instant (<30ms) startup time, and a minimal ~35MB RAM footprint with zero Electron bloat.

@@ -227,6 +227,15 @@ impl CoderCraftApp {
             } else if let Some(rest) = msg.strip_prefix("VRAMLINE:") {
                 self.llm_vram_line = rest.to_string();
                 self.llm_status_line = "telemetry refreshed".to_string();
+            } else if let Some(rest) = msg.strip_prefix("CHAT_REPLY:") {
+                self.agent_session.add_assistant_message(rest, vec![]);
+                self.llm_status_line = "deepseek-flash replied".to_string();
+                self.status_msg = self.llm_status_line.clone();
+            } else if let Some(rest) = msg.strip_prefix("CHAT_ERR:") {
+                self.agent_session
+                    .add_assistant_message(&format!("DeepSeek error: {rest}"), vec![]);
+                self.llm_status_line = rest.to_string();
+                self.status_msg = self.llm_status_line.clone();
             } else {
                 self.llm_status_line = msg;
             }
@@ -256,7 +265,7 @@ impl CoderCraftApp {
             // ~10:1 on the dark panel fill (was 139,148,158 at ~4:1).
             egui::Color32::from_rgb(203, 213, 225)
         } else {
-            egui::Color32::from_rgb(51, 65, 85)
+            egui::Color32::BLACK
         }
     }
 
@@ -306,12 +315,20 @@ impl CoderCraftApp {
             visuals.widgets.active.bg_fill = egui::Color32::from_rgb(44, 56, 78);
         } else {
             // Light theme: keep fills opaque with a solid black modal border.
-            visuals.panel_fill = egui::Color32::from_rgb(244, 244, 246);
-            visuals.window_fill = self.modal_fill_color();
+            visuals.panel_fill = egui::Color32::WHITE;
+            visuals.window_fill = egui::Color32::WHITE;
+            visuals.extreme_bg_color = egui::Color32::WHITE;
+            visuals.faint_bg_color = egui::Color32::WHITE;
             visuals.window_stroke = egui::Stroke::new(1.5, egui::Color32::BLACK);
             visuals.window_shadow = egui::Shadow::NONE;
             visuals.window_highlight_topmost = true;
-            visuals.override_text_color = Some(egui::Color32::from_rgb(16, 20, 28));
+            visuals.override_text_color = Some(egui::Color32::BLACK);
+            visuals.weak_text_color = Some(egui::Color32::BLACK);
+            visuals.widgets.noninteractive.fg_stroke =
+                egui::Stroke::new(1.0, egui::Color32::BLACK);
+            visuals.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, egui::Color32::BLACK);
+            visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.5, egui::Color32::BLACK);
+            visuals.widgets.active.fg_stroke = egui::Stroke::new(1.5, egui::Color32::BLACK);
             visuals.hyperlink_color = egui::Color32::from_rgb(9, 105, 218);
         }
 
@@ -1948,16 +1965,48 @@ impl CoderCraftApp {
                     let prompt = self.chat_prompt.clone();
                     self.chat_prompt.clear();
 
-                    if self.agent_session.mode == AgentMode::Plan {
+                    if self.llm_provider_pick == "deepseek" {
+                        self.agent_session.add_user_message(&prompt);
+                        if self.llm_job_running {
+                            self.status_msg = "A DeepSeek request is already running".to_string();
+                        } else {
+                            let system = match self.agent_session.mode {
+                                AgentMode::Plan => "You are CoderCraft Planner Agent. Analyze the request and write a plan. Do not claim you edited files.",
+                                AgentMode::Build => "You are CoderCraft Builder Agent. Answer with the code change as a unified diff when the user asked for an edit.",
+                            };
+                            let model = self.llm_model_edit.clone();
+                            let key_present = codercraft_core::craft_ai_core::CraftAiConfig::load()
+                                .get_api_key(codercraft_core::craft_ai_core::ProviderKind::DeepSeek)
+                                .filter(|k| !k.trim().is_empty())
+                                .is_some();
+                            if key_present {
+                                self.llm_spawn("deepseek-flash", move || {
+                                    match codercraft_core::craft_ai_core::deepseek::complete_flash(
+                                        &model, system, &prompt,
+                                    ) {
+                                        Ok(text) => format!("CHAT_REPLY:{text}"),
+                                        Err(e) => format!("CHAT_ERR:{e}"),
+                                    }
+                                });
+                                self.terminal_logs
+                                    .push(format!("[agent:deepseek] sent to deepseek-flash"));
+                            } else {
+                                self.agent_session.add_assistant_message(
+                                    "DeepSeek API key is not set. Save it in the LLM settings tab.",
+                                    vec![],
+                                );
+                            }
+                        }
+                    } else if self.agent_session.mode == AgentMode::Plan {
                         let _plan = self.agent_session.generate_step_plan(&prompt);
-                        self.status_msg = "Architecture plan formulated".to_string();
+                        self.status_msg = "Architecture plan formulated. Pick the DeepSeek provider to send this to deepseek-flash.".to_string();
                         self.terminal_logs.push(format!("[agent:plan] Formulated plan for '{}'", prompt));
                     } else {
                         self.agent_session.add_user_message(&prompt);
                         let proposal = AgentEngine::synthesize_refactor(&prompt, "src/main.rs");
                         self.agent_session.active_patches = proposal.patches.clone();
                         let reply = format!(
-                            "Refactoring proposal synthesized: {} patch(es) ready for verification on '{}'.",
+                            "Refactoring proposal synthesized: {} patch(es) ready for verification on '{}'. Pick the DeepSeek provider to send this to deepseek-flash.",
                             proposal.patches.len(),
                             prompt
                         );

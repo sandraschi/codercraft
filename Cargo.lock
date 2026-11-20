@@ -851,7 +851,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
- "thiserror 2.0.21",
+ "thiserror 1.0.69",
  "tokio",
 ]
 
@@ -884,7 +884,7 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "databasecraft-core"
-version = "0.5.0"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "databasecraft-store",
@@ -896,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "databasecraft-store"
-version = "0.5.0"
+version = "0.7.0"
 dependencies = [
  "chrono",
  "rusqlite",
@@ -3527,7 +3527,6 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",

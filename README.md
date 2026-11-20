@@ -9,6 +9,16 @@
 
 Built in 100% native Rust (`egui 0.37` + `wgpu`) on **Port 14128**, CoderCraft delivers sub-millisecond rendering, an instant (<30ms) startup time, and a minimal ~35MB RAM footprint with zero Electron bloat.
 
+## Install
+
+Tell Cursor, Claude, Antigravity, or OpenCode: **Install this.**
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\install-craft.ps1
+```
+
+Installs the Windows app, the CLI, and the MCP bundle.
+
 ---
 
 ## Key Superpowers
